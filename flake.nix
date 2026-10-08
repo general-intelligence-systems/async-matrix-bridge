@@ -3,13 +3,22 @@
 
   inputs.mine.url = "github:n-at-han-k/flake.nix";
   inputs.mine.inputs.nixpkgs.follows = "nixpkgs";
-  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
+  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   inputs.flake-utils.url = "github:numtide/flake-utils";
 
   outputs = { mine, nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        # matrix-commander pulls in libolm, which nixpkgs marks insecure
+        # (CVE-2024-45191/2/3, deprecated upstream). It is a dev-shell CLI for
+        # poking at a homeserver by hand, not something this gem links against,
+        # so allow it by name — a version-pinned permittedInsecurePackages
+        # entry would break on the next olm bump. Done in the nixpkgs import
+        # rather than via NIXPKGS_ALLOW_INSECURE so `nix develop` stays pure.
+        pkgs = import nixpkgs {
+          inherit system;
+          config.allowInsecurePredicate = pkg: nixpkgs.lib.getName pkg == "olm";
+        };
 
         # Our Gemfile says `gemspec`, and async-matrix-bridge.gemspec opens
         # lib/async/matrix/bridge/version.rb for the version. bundlerEnv
@@ -86,6 +95,7 @@
 
             # scampi discovers co-located `__END__` specs with ripgrep.
             pkgs.ripgrep
+            pkgs.matrix-commander
           ];
 
           shellHook = /* bash */ ''

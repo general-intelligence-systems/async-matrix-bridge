@@ -1,7 +1,4 @@
 server_name: "localhost"
-# Everything synapse writes goes to /tmp: it is writable by the user start.py
-# drops to, so nothing has to be mounted and no uid has to be lined up. This rig
-# keeps nothing across a restart anyway.
 pid_file: /tmp/homeserver.pid
 public_baseurl: "http://localhost:8008/"
 
