@@ -41,6 +41,12 @@ GEM
       protocol-url (~> 0.2)
     async-http-cache (0.4.6)
       async-http (~> 0.56)
+    async-matrix (3.0.0)
+      async (~> 2.46)
+      async-http (~> 0.105)
+      json_schemer (~> 2.5)
+      rb_sys (~> 0.9)
+      string_builder (~> 1.2)
     async-matrix (3.0.0-aarch64-linux)
       async (~> 2.46)
       async-http (~> 0.105)
@@ -195,6 +201,9 @@ GEM
     racc (1.8.1)
     rack (3.2.7)
     rainbow (3.1.1)
+    rake-compiler-dock (1.12.0)
+    rb_sys (0.9.130)
+      rake-compiler-dock (= 1.12.0)
     regexp_parser (2.13.1)
     rubocop (1.91.0)
       json (>= 2.3)
@@ -233,6 +242,7 @@ PLATFORMS
   arm-linux
   arm-linux-musl
   arm64-darwin
+  ruby
   x86_64-darwin
   x86_64-linux
   x86_64-linux-musl
