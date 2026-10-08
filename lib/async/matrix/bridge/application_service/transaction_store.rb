@@ -21,7 +21,9 @@ module Async
           end
 
           def mark_seen(txn_id)
-            prune! if @seen.size >= @capacity
+            if @seen.size >= @capacity
+              prune!
+            end
             @seen[txn_id] = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           end
 

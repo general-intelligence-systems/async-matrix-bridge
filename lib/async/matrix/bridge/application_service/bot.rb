@@ -34,7 +34,9 @@ module Async
             @client   = client
             @handlers = []
 
-            instance_eval(&block) if block
+            if block
+              instance_eval(&block)
+            end
           end
 
           # Register a handler block for one or more event types.
@@ -44,15 +46,19 @@ module Async
           #   not_from: — :self skips events sent by this bot's own MXID
           #
           def on(*event_types, msgtype: nil, not_from: nil, &block)
-            raise ArgumentError, "on requires at least one event type" if event_types.empty?
-            raise ArgumentError, "on requires a block" unless block
+            if event_types.empty?
+              raise ArgumentError, "on requires at least one event type"
+            end
+            unless block
+              raise ArgumentError, "on requires a block"
+            end
 
             handler = Handler.new(
               bot:         self,
               event_types: event_types.flatten,
               msgtype:     msgtype,
               not_from:    not_from,
-              block:       block
+              block:       block,
             )
 
             @handlers << handler
@@ -73,11 +79,15 @@ module Async
             end
 
             def call(event)
-              return if @msgtype  && event.content&.msgtype != @msgtype
-              return if @not_from == :self && event.sender == @bot.client.config.bot_mxid
-
-              # Execute the block in a context that has helper methods
-              Context.new(@bot.client).execute(event, &@block)
+              if @msgtype  && event.content&.msgtype != @msgtype
+                nil
+              else
+                if @not_from == :self && event.sender == @bot.client.config.bot_mxid
+                  nil
+                else
+                  Context.new(@bot.client).execute(event, &@block)
+                end
+              end
             end
           end
 

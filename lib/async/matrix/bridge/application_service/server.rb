@@ -119,21 +119,27 @@ module Async
                   end
 
                   def secure_compare(a, b)
-                    return false unless a.bytesize == b.bytesize
-
-                    l = a.unpack("C*")
-                    r = b.unpack("C*")
-                    result = 0
-                    l.each_with_index { |byte, i| result |= byte ^ r[i] }
-                    result.zero?
+                    if a.bytesize == b.bytesize
+                      l = a.unpack("C*")
+                      r = b.unpack("C*")
+                      result = 0
+                      l.each_with_index { |byte, i| result |= byte ^ r[i] }
+                      result.zero?
+                    else
+                      false
+                    end
                   end
 
                   # Raw JSON body, parsed here (rather than via Grape's param
                   # coercion) so malformed input yields the Matrix M_BAD_JSON.
                   def json_body
                     raw = request.body.read
-                    request.body.rewind if request.body.respond_to?(:rewind)
-                    return {} if raw.nil? || raw.empty?
+                    if request.body.respond_to?(:rewind)
+                      request.body.rewind
+                    end
+                    if raw.nil? || raw.empty?
+                      return {}
+                    end
 
                     JSON.parse(raw)
                   rescue JSON::ParserError => e
@@ -176,7 +182,9 @@ module Async
 
                   get "thirdparty/protocol/:protocol" do
                     result = thirdparty&.protocol(params[:protocol])
-                    error!({errcode: "M_NOT_FOUND"}, 404) unless result
+                    unless result
+                      error!({errcode: "M_NOT_FOUND"}, 404)
+                    end
 
                     result
                   end
@@ -206,12 +214,35 @@ module Async
           # as the Matrix routes. `mount` is included, so you can compose in other
           # Grape APIs too.
           def_delegators :@api,
-            :get, :post, :put, :patch, :delete, :head, :options,
-            :namespace, :group, :resource, :resources, :route, :route_param,
-            :before, :after, :rescue_from, :helpers, :params, :desc, :use, :mount,
-            :version, :prefix, :format, :content_type,
+            :get,
+            :post,
+            :put,
+            :patch,
+            :delete,
+            :head,
+            :options,
+            :namespace,
+            :group,
+            :resource,
+            :resources,
+            :route,
+            :route_param,
+            :before,
+            :after,
+            :rescue_from,
+            :helpers,
+            :params,
+            :desc,
+            :use,
+            :mount,
+            :version,
+            :prefix,
+            :format,
+            :content_type,
             # Rack + introspection:
-            :call, :routes, :recognize_path
+            :call,
+            :routes,
+            :recognize_path
 
           attr_reader :api, :dispatcher, :client
 
@@ -231,7 +262,9 @@ module Async
               c[:client]     = client
             end
 
-            instance_eval(&block) if block
+            if block
+              instance_eval(&block)
+            end
           end
 
           # Register handlers with the dispatcher. Sugar over dispatcher.register:

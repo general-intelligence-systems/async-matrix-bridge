@@ -57,26 +57,26 @@ module Async
             end
           end
 
-            def dispatch(event)
-              type     = event.type
-              handlers = @handlers[type]
+          def dispatch(event)
+            type     = event.type
+            handlers = @handlers[type]
 
-              if handlers.empty?
-                Console.debug(self) { "No handler for event type: #{type}" }
-              else
-                handlers.each do |handler|
-                  begin
-                    handler.call(event)
-                  rescue => e
-                    Console.error(self) { "Handler #{handler.class.name} raised #{e.class}: #{e.message}" }
-                  end
+            if handlers.empty?
+              Console.debug(self) { "No handler for event type: #{type}" }
+            else
+              handlers.each do |handler|
+                begin
+                  handler.call(event)
+                rescue => e
+                  Console.error(self) { "Handler #{handler.class.name} raised #{e.class}: #{e.message}" }
                 end
               end
             end
+          end
 
-            def handler_count
-              @handlers.values.flatten.size
-            end
+          def handler_count
+            @handlers.values.flatten.size
+          end
         end
       end
     end
