@@ -1,0 +1,8 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gem "falcon", "~> 0.55.5"
+gem "async-matrix-bridge", "~> 1.0"
+gem "brute", "~> 3.0"
+gem "anthropic", "~> 1.5"

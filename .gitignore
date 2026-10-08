@@ -1,0 +1,36 @@
+# Jekyll docs build artifacts
+docs/_site/
+docs/.jekyll-cache/
+docs/.jekyll-metadata
+docs/Gemfile.lock
+docs/vendor/
+
+# Synapse runtime artifacts (examples/)
+**/files/homeserver.db
+**/files/homeserver.db-shm
+**/files/homeserver.db-wal
+**/files/homeserver.pid
+**/files/media_store/
+**/files/*.signing.key
+
+# Generated TLS certificates
+**/certs/
+
+# Gems
+/.gem/
+*.gem
+/pkg/
+
+# Nix
+/.direnv/
+result
+
+# Editor
+*.swp
+*.swo
+*~
+
+# examples/run_test.sh scratch
+.example-test-bundle
+**/.Gemfile.run_test
+**/.Gemfile.run_test.lock
