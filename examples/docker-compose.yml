@@ -1,0 +1,22 @@
+services:
+  synapse:
+    build: ./synapse
+    environment:
+      SYNAPSE_CONFIG_PATH: /config/homeserver.yaml
+      PYTHONPATH: /config/modules
+    ports:
+      - "8008:8008"
+    volumes:
+      - ./synapse/homeserver.yaml:/config/homeserver.yaml:ro
+      - ./synapse/signing.key:/config/signing.key:ro
+      - ./synapse/appservice-agent.yaml:/config/appservice-agent.yaml:ro
+      - ./synapse/modules:/config/modules:ro
+
+  appservice:
+    build: ./appservice
+    depends_on:
+      - nats
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./synapse/appservice-agent.yaml:/config/appservice-agent.yaml:ro

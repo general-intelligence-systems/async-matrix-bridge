@@ -1,0 +1,14 @@
+# Registration for the NATS bridge. The users namespace is a non-exclusive
+# catch-all so Synapse pushes every message in any room with a local user;
+# narrow it if you only want specific users bridged.
+id: agent
+url: "http://appservice:9000"
+as_token: "g-eSVPhMmBVwP1PKxjGpzd-SuG8TszT56JRMESA-_-0"
+hs_token: "YkdZFNq_XZtVgMWvIf5_u---6ijwvSnIwMRxygLpCWg"
+sender_localpart: agent
+namespaces:
+  users:
+    - exclusive: false
+      regex: "@.*:localhost"
+  aliases: []
+  rooms: []

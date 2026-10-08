@@ -138,10 +138,10 @@ module Async
                       request.body.rewind
                     end
                     if raw.nil? || raw.empty?
-                      return {}
+                      {}
+                    else
+                      JSON.parse(raw)
                     end
-
-                    JSON.parse(raw)
                   rescue JSON::ParserError => e
                     Console.error(self) { "Bad JSON in request: #{e.message}" }
                     error!({errcode: "M_BAD_JSON"}, 400)
