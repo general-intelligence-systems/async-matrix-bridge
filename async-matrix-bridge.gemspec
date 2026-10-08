@@ -10,9 +10,10 @@ Gem::Specification.new do |spec|
 	 spec.license = "Apache-2.0"
 
 	 spec.summary = "An async-native Matrix Application Service SDK for Ruby."
-	 spec.description = "The server side of a Matrix bridge or bot: a Rack 3 / Grape application " \
- 		"service that authenticates and deduplicates homeserver transactions and dispatches each " \
- 		"event to the handlers you register. Built on async-matrix and the Socketry async ecosystem."
+	 spec.description = "The server side of a Matrix bridge or bot: one endpoint class that authenticates " \
+ 		"and deduplicates homeserver transactions, then hands each event to a block you pattern " \
+ 		"match on, concurrently. Serves a Rack env or a Protocol::HTTP::Request. Built on " \
+ 		"async-matrix and the Socketry async ecosystem."
 	 spec.homepage = "https://github.com/general-intelligence-systems/async-matrix-bridge"
 
 	 spec.required_ruby_version = ">= 3.3"
@@ -27,12 +28,10 @@ Gem::Specification.new do |spec|
 
 	 spec.add_dependency "async", "~> 2.46"
 	 spec.add_dependency "async-matrix", "~> 3.0"
-	 spec.add_dependency "grape", "~> 4.0"
+	 spec.add_dependency "protocol-http", "~> 0.72"
 	 spec.add_dependency "json_schemer", "~> 2.5"
 
   spec.add_development_dependency "scampi", "~> 1.0"
-  spec.add_development_dependency "falcon", "~> 0.57"
   spec.add_development_dependency "logger"
-  spec.add_development_dependency "rack", "~> 3.0"
   spec.add_development_dependency "lefthook", "~> 2.2"
 end

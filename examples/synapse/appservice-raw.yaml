@@ -1,0 +1,11 @@
+id: raw
+url: "http://raw-appservice:9001"
+as_token: "bViAImi1ErIwvJ1gD3x0M3SPYFngN76Q3M6KyqR1oSc"
+hs_token: "gxHNVl6Z3T5ArcRaivDA14Icm6Hs0gTZT3YhFkVoe3M"
+sender_localpart: raw
+namespaces:
+  users:
+    - exclusive: false
+      regex: "@raw:localhost"
+  aliases: []
+  rooms: []

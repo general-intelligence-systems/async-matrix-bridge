@@ -2,103 +2,87 @@
 layout: default
 title: Application Service
 nav_order: 1
-description: The Grape-based Application Service server, its Matrix wire-protocol routes, authentication, idempotency, and the transaction dispatch flow.
+description: The Endpoint class — the Matrix wire-protocol routes, authentication, idempotency, concurrent dispatch, and the Rack and Protocol::HTTP sources it serves.
 ---
 
 # Application Service
 
-`ApplicationService::Server` is the server side of the [Matrix Application Service API](https://spec.matrix.org/latest/application-service-api/). It wraps a [Grape](https://github.com/ruby-grape/grape) `API` with the Matrix wire-protocol routes mixed in, and it is itself a Rack app — `run server` works directly, and it mounts into any larger Rack stack.
+`Bridge::Endpoint` is the server side of the [Matrix Application Service API](https://spec.matrix.org/latest/application-service-api/), in one class. It is built per request, holds no state of its own, and returns a response — so it drops into any server without being a framework.
 
-## Constructing a server
+## Constructing an endpoint
 
 ```ruby
-app = Async::Matrix::Bridge::ApplicationService::Server.new(
-  hs_token: config.appservice.hs_token,   # authenticates inbound transactions
-  client:   client                        # optional; exposed to your own endpoints
-) do
-  dispatch some_bot_or_handler
+Bridge = Async::Matrix::Bridge
+
+config = Bridge::Registration.load("/config/registration.yaml",
+  homeserver: "http://synapse:8008", domain: "localhost")
+
+store = Bridge::TransactionStore.new
+
+endpoint = Bridge::Endpoint.new(source, config: config, store: store) do |message|
+  # one case/in over the whole protocol
 end
 ```
 
-The block is evaluated in the server's context. Because the server forwards Grape's route DSL, you can declare application-specific endpoints right alongside the Matrix routes — they are *not* subject to Matrix's `hs_token` auth, so guard them yourself:
+| Argument | Meaning |
+|---|---|
+| `source` | A Rack env (`Hash`) or a `Protocol::HTTP::Request`. |
+| `config:` | Anything answering `config.appservice.hs_token` — normally a {% raw %}`Registration`{% endraw %}. |
+| `store:` | A `TransactionStore` for idempotency. Omitted, nothing is deduplicated. |
+| `concurrency:` | Maximum events dispatched at once. Default 8. |
 
-```ruby
-Async::Matrix::Bridge::ApplicationService::Server.new(hs_token:, client:) do
-  dispatch bot
-
-  post "/_webhook/send" do
-    client.send_text(params[:room_id], params[:body])
-    { ok: true }
-  end
-end
-```
+The endpoint is built per request *on purpose*: the two things that must outlive a request — the transaction store and your `Client` — are passed in or closed over, so nothing is hidden in global state.
 
 ## Routes
 
-Mixing the protocol in defines these routes, all under `/_matrix/app/v1`:
+All under `/_matrix/app/v1`:
 
-| Method & path | Purpose | Auth |
-|---|---|---|
-| `PUT transactions/{txnId}` | receive a batch of events | yes |
-| `POST ping` | homeserver healthcheck | no |
-| `GET users/{userId}` | user-existence query | yes |
-| `GET rooms/{roomAlias}` | room-alias query | yes |
-| `GET thirdparty/protocol/{proto}` | protocol metadata | yes |
-| `GET thirdparty/location(/{proto})` | location lookup | yes |
-| `GET thirdparty/user(/{proto})` | user lookup | yes |
+| Route | Behaviour |
+|---|---|
+| `PUT transactions/{txnId}` | Receives events. Authenticated, idempotent, dispatched concurrently. |
+| `POST ping` | Healthcheck. **No** authentication, per spec. |
+| `GET users/{userId}` | User existence query. `200`. |
+| `GET rooms/{roomAlias}` | Room alias query. `404`. |
+| `GET thirdparty/...` | Protocol, location and user lookups, routed to your block. |
 
-Third-party queries delegate to an optional `thirdparty:` collaborator — a duck-type with `protocol(name)`, `locations(proto, params)`, and `users(proto, params)`. Return `nil` from `protocol` to produce a `404 M_NOT_FOUND`.
+Any other path answers `404` with `M_NOT_FOUND`, which makes an endpoint a natural fall-through for a router that matches its own routes first. Call `handled?` to ask instead of assume.
 
-## The event flow
+## Authentication
 
-```
-homeserver PUT transaction
-        │
-        ▼
-authenticate!            constant-time compare on hs_token → 403 M_FORBIDDEN on mismatch
-        │
-        ▼
-TransactionStore         seen this txnId? → 200 immediately (idempotent, no re-dispatch)
-        │
-        ▼
-TransactionHandler       route each event to handlers whose #event_types match
-        │
-        ▼
-your handlers            run independently; one raising is logged, the rest still run
-```
+The `hs_token` is compared in constant time, and read from the `Authorization: Bearer` header or the legacy `access_token` query parameter. A mismatch is `403 M_FORBIDDEN`. `POST ping` is exempt.
 
-Two properties matter for correctness against a real homeserver:
+## Idempotency
 
-- **Constant-time authentication.** The `hs_token` is compared with a length-safe, constant-time routine so a mismatch leaks no timing signal.
-- **Idempotency.** Homeservers retry transactions they didn't get a `200` for. The `TransactionStore` is an in-memory LRU (capacity 1024, prunes the oldest half when full) keyed by transaction ID, so a retried batch is acknowledged without running your handlers twice. Because the HTTP layer is stateless across requests, this store lives on the long-lived `TransactionHandler`, not on the request.
+`TransactionStore` is an in-memory LRU of seen transaction IDs (capacity 1024, pruning the oldest half when full). It lives outside the endpoint because the endpoint is per request while the store must be long-lived.
 
-## TransactionHandler
+A transaction id is recorded only *after* every handler has completed without raising. See [retries](#retries).
 
-`ApplicationService::TransactionHandler` is the stable object that owns handler registration and idempotent dispatch. `Server#dispatch` delegates to it, and `server.dispatcher` exposes it (e.g. `server.dispatcher.handler_count`). You can also use it standalone if you are mixing the routes into your own Grape API:
+## Concurrent dispatch
+
+The events of a transaction run in their own fibers under a bounded `Async::Semaphore`, and all of them are awaited before the response:
 
 ```ruby
-class MyAppService < Grape::API
-  include Async::Matrix::Bridge::ApplicationService::Server::Grape
-end
-
-handler = Async::Matrix::Bridge::ApplicationService::TransactionHandler.new
-handler.register(bot)
-
-MyAppService.configure do |c|
-  c[:hs_token]    = config.appservice.hs_token
-  c[:dispatcher]  = handler
-  c[:client]      = client
-end
+Bridge::Endpoint.new(source, config: config, store: store, concurrency: 16) { ... }
 ```
 
-`register` accepts a `Bot` (expanded into its handlers) or any object satisfying the [handler duck-type]({% link _core_features/bots-and-handlers.md %}).
+Outside a reactor the same endpoint dispatches sequentially, so it still works under `Rack::MockRequest` in a test.
 
-## Serving
+## Retries
 
-`Server` delegates `#call(env)` to the wrapped Grape API, so any async-capable Rack server runs it. In production, use [Falcon](https://github.com/socketry/falcon):
+If your block raises, the response is `500` and the transaction id is **not** recorded, so the homeserver retries the transaction. Recording it and answering `200` would make a failed handler drop its events permanently, because the retry would be deduplicated away.
 
-```sh
-falcon serve --bind http://0.0.0.0:9292
+A homeserver retries with exponential backoff and will not deliver newer transactions to that service until the failing one succeeds, so a permanently-failing handler stalls the service rather than silently losing events.
+
+## Two sources, two response types
+
+`Endpoint` accepts a Rack env or a `Protocol::HTTP::Request`, and answers with whichever type the source implies — a Rack triplet or a `Protocol::HTTP::Response`. An instance also defines `to_ary`, so it can be returned straight from a Rack router block.
+
+```ruby
+# Rack (ratalada, falcon, any Rack server)
+Bridge::Endpoint.new(request.env, config: config, store: store) { ... }
+
+# No Rack at all
+Bridge::Endpoint.new(request, config: config, store: store) { ... }.response
 ```
 
-Falcon runs each request on a fiber, which is what lets a single process fan out thousands of concurrent homeserver calls from inside your handlers without threads.
+Three differences between the sources are handled for you: a `Protocol::HTTP::Request`'s `path` carries the query string, its body reads chunk-wise rather than whole, and its `authorization` header is not a plain `String`.

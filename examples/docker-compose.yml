@@ -10,13 +10,34 @@ services:
       - ./synapse/homeserver.yaml:/config/homeserver.yaml:ro
       - ./synapse/signing.key:/config/signing.key:ro
       - ./synapse/appservice-agent.yaml:/config/appservice-agent.yaml:ro
+      - ./synapse/appservice-raw.yaml:/config/appservice-raw.yaml:ro
       - ./synapse/modules:/config/modules:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8008/_matrix/client/versions || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
 
   appservice:
-    build: ./appservice
+    build:
+      context: ..
+      dockerfile: examples/appservice/Dockerfile
     depends_on:
-      - nats
+      synapse:
+        condition: service_healthy
     ports:
       - "9000:9000"
     volumes:
       - ./synapse/appservice-agent.yaml:/config/appservice-agent.yaml:ro
+
+  raw-appservice:
+    build:
+      context: ..
+      dockerfile: examples/raw_appservice/Dockerfile
+    depends_on:
+      synapse:
+        condition: service_healthy
+    ports:
+      - "9001:9001"
+    volumes:
+      - ./synapse/appservice-raw.yaml:/config/appservice-raw.yaml:ro

@@ -2,68 +2,101 @@
 layout: default
 title: Configuration
 nav_order: 1
-description: JSON-Schema-validated appservice config, dot-notation access, and default vivification.
+description: Registration — the appservice registration file, validated against the Matrix spec's own JSON Schema, with namespace queries.
 ---
 
 # Configuration
 
-`ApplicationService::Config` loads your service's YAML config and validates it against a JSON-Schema suite before your bot ever starts — a missing token or a mistyped section fails at boot, not at the first homeserver call.
+`Bridge::Registration` reads the application service **registration file** — the same file you hand your homeserver — and validates it against the Matrix spec's own schema. There is no second config format to keep in sync.
 
 ## Loading
 
 ```ruby
-config = Async::Matrix::Bridge::ApplicationService::Config.load("config/appservice.yml")
+Bridge = Async::Matrix::Bridge
+
+config = Bridge::Registration.load("/config/registration.yaml",
+  homeserver: "http://synapse:8008",
+  domain: "localhost")
 ```
 
-Or construct one from a hash directly (handy in examples and tests):
+`Registration.new(hash, homeserver:, domain:)` takes an already-parsed Hash if you load the YAML yourself.
 
-```ruby
-config = Async::Matrix::Bridge::ApplicationService::Config.new(
-  "homeserver" => { "address" => "http://synapse:8008", "domain" => "localhost" },
-  "appservice" => {
-    "as_token" => "…",
-    "hs_token" => "…",
-    "bot"      => { "username" => "bot" },
-  }
-)
-```
+## Why homeserver and domain are separate
 
-A minimal config:
+A registration describes the application service *to* the homeserver. It carries the service's own `url`, not the server's — so the homeserver address is the one thing it structurally cannot provide, and it is a required argument.
+
+`domain` is required rather than inferred from the homeserver URL because a `server_name` need not match the host it is served from. Guessing it produces plausible, broken MXIDs, which is worse than asking.
+
+## The file
 
 ```yaml
-homeserver:
-  address: "http://synapse:8008"
-  domain: "localhost"
-
-appservice:
-  as_token: "your-appservice-token"
-  hs_token: "your-homeserver-token"
-  bot:
-    username: "bot"
+id: agent
+url: "http://appservice:9000"
+as_token: "your-appservice-token"
+hs_token: "your-homeserver-token"
+sender_localpart: agent
+namespaces:
+  users:
+    - exclusive: false
+      regex: "@.*:localhost"
+  aliases: []
+  rooms: []
 ```
 
-Override the path at runtime without touching code:
+Point your homeserver at it. In Synapse, under `app_service_config_files` in `homeserver.yaml`. Synapse reads registrations **at startup only**, so editing one needs a restart.
 
-```sh
-APPSERVICE_CONFIG=/etc/bot/appservice.yml falcon serve
-```
-
-## Dot-notation access
-
-The validated config is extended with the `Vivify` mixin, giving nested hashes dot-notation access with autovivification:
+## Reading it
 
 ```ruby
-config.homeserver.address          # => "http://synapse:8008"
-config.appservice.bot.username     # => "bot"
-config.bot_mxid                    # => "@bot:localhost"  (derived convenience)
+config.id                                      # => "agent"
+config.url                                     # => "http://appservice:9000"
+config.sender_localpart                        # => "agent"
+config.bot_mxid                                # => "@agent:localhost"
+
+config.appservice.as_token                     # the surface Client reads
+config.appservice.hs_token                     # the surface Endpoint reads
+config.homeserver.address                      # => "http://synapse:8008"
+
+config.protocols                               # => []
+config.receive_ephemeral?                      # => false
+config.rate_limited?                           # => false
 ```
 
-`Vivify` is applied only to the config tree — it does not monkey-patch `Hash` globally. Reading an unset key vivifies an empty child rather than raising, so deep optional sections are safe to probe.
+That four-field surface — `homeserver.address`, `appservice.as_token`, `appservice.hs_token`, `bot_mxid` — is everything `Async::Matrix::Client` and `Endpoint` require, so one object serves both.
 
-## Schema validation
+## Namespaces
 
-Validation runs against a multi-file JSON-Schema suite under `application_service/config/schema/`, mirroring the [mautrix bridgev2](https://github.com/mautrix) Go config structs. The suite covers, among others:
+```ruby
+config.namespaces(:users)                      # the raw entries
+config.covers?(:users, "@alice:localhost")     # => true
+config.exclusive?(:users, "@alice:localhost")  # => false
+```
 
-`homeserver` · `appservice` · `bridge` · `database` · `encryption` · `double_puppet` · `direct_media` · `public_media` · `backfill` · `permissions` · `relay` · `provisioning` · `logging` · `analytics` · `management_room_texts`
+`covers?` tells you whether a value falls in one of your namespaces; `exclusive?` tells you whether you claimed sole ownership of it. `:users`, `:rooms` and `:aliases` are the valid kinds; anything else raises `ArgumentError`.
 
-Schemas are composed with `json_schemer` using `insert_property_defaults: true`, so any field with a schema default is **auto-filled** when absent — your YAML only needs to specify what differs from the defaults. Invalid config raises with the offending path, so typos surface immediately.
+## Validation
+
+The schema lives in `lib/async/matrix/bridge/registration/schema/`, vendored verbatim from [matrix-org/matrix-spec](https://github.com/matrix-org/matrix-spec/tree/main/data/api/application-service/definitions) — `registration.yaml` and `namespace_list.yaml`, converted to JSON with the relative `$ref` repointed. They are already JSON Schema draft 2020-12, which is what `json_schemer` speaks, so they are used as published rather than transcribed.
+
+Synapse ships no schema for this file; it validates by hand in `synapse/config/appservice.py#_load_appservice`. The spec is the only machine-readable source, and it agrees with Synapse — including the subtle rule that `url` is required *and* nullable, so push can be disabled explicitly but never by omission.
+
+A bad file raises `Async::Matrix::BadJsonError` at load:
+
+```ruby
+Bridge::Registration.load("broken.yaml", homeserver: "http://hs", domain: "localhost")
+# => Async::Matrix::BadJsonError: Registration validation failed:
+#    object at root is missing required properties: hs_token
+```
+
+A missing file raises `Async::Matrix::NotFoundError`.
+
+## Refreshing the vendored schema
+
+The spec's definitions are the upstream source; re-fetch them and repoint the `$ref` if the spec moves:
+
+```bash
+curl -fsS https://raw.githubusercontent.com/matrix-org/matrix-spec/main/data/api/application-service/definitions/registration.yaml
+curl -fsS https://raw.githubusercontent.com/matrix-org/matrix-spec/main/data/api/application-service/definitions/namespace_list.yaml
+```
+
+They must be written as `.json`: the gemspec packages `lib/**/*.json` and would silently drop a `.yaml`.

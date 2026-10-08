@@ -2,44 +2,80 @@
 layout: default
 title: Examples
 nav_order: 1
-description: Runnable bots and bridges, each with a Docker Compose + Synapse stack.
+description: Two runnable application services — one on a Rack stack, one on a bare Async::HTTP server — sharing a Synapse Docker Compose stack.
 ---
 
 # Examples
 
-The [`examples/`](https://github.com/general-intelligence-systems/async-matrix-bridge-bridge/tree/main/examples) directory holds complete, runnable services. Each brings its own `Dockerfile` and `docker-compose.yml` and stands up against a real [Synapse](https://github.com/element-hq/synapse) homeserver — not a mock — so you can invite the bot and watch it work.
+The [`examples/`](https://github.com/general-intelligence-systems/async-matrix-bridge/tree/main/examples) directory holds two complete services and the Synapse stack they run against. Both are the same echo bot, differing only in the server they are mounted on.
 
-## The shared Synapse stack
-
-[`examples/synapse/`](https://github.com/general-intelligence-systems/async-matrix-bridge-bridge/tree/main/examples/synapse) is the base stack the other examples layer on: Synapse, a [FluffyChat](https://fluffychat.im/) web client to talk to it, and an Nginx reverse proxy. Start here to get a homeserver you can point a bot at.
-
-## echo_bot
-
-[`examples/echo_bot/`](https://github.com/general-intelligence-systems/async-matrix-bridge-bridge/tree/main/examples/echo_bot) — the canonical minimal application service. Two plain handlers: one auto-joins on invite (`m.room.member`), one echoes text back as a notice (`m.room.message`). This is the example the [Getting Started]({% link _getting_started/getting-started.md %}) guide builds toward, and the clearest illustration of the [handler duck-type]({% link _core_features/bots-and-handlers.md %}#plain-handlers).
-
-## inbound_webhook_bot
-
-[`examples/inbound_webhook_bot/`](https://github.com/general-intelligence-systems/async-matrix-bridge-bridge/tree/main/examples/inbound_webhook_bot) — shows off the fact that `Server` is a Grape API: it declares its **own** HTTP endpoint alongside the Matrix routes, so an external system can `POST` a webhook that the bot relays into a Matrix room. The pattern for wiring app-specific endpoints is covered in [Application Service]({% link _core_features/application-service.md %}#constructing-a-server).
-
-## brute
-
-[`examples/brute/`](https://github.com/general-intelligence-systems/async-matrix-bridge-bridge/tree/main/examples/brute) — an AI-agent bot. It passes an `ANTHROPIC_API_KEY` through to the container and answers messages with an LLM, demonstrating how a handler can call out to an external service (all fiber-concurrent) before replying.
-
-## brute-steering
-
-[`examples/brute-steering/`](https://github.com/general-intelligence-systems/async-matrix-bridge-bridge/tree/main/examples/brute-steering) — extends the brute agent with a steering check, showing a more involved handler pipeline around the same LLM loop.
-
-## lindsey_and_dave
-
-[`examples/lindsey_and_dave/`](https://github.com/general-intelligence-systems/async-matrix-bridge-bridge/tree/main/examples/lindsey_and_dave) — two bots in one stack, useful for watching services interact with each other rather than only with human users.
-
-## Running an example
-
-Each example directory is self-contained:
-
-```sh
-cd examples/echo_bot
+```bash
+cd examples
 docker compose up --build
 ```
 
-Bring up the shared Synapse stack if the example expects it, open FluffyChat, and invite the bot's MXID (e.g. `@bot:localhost`) to a room. See each example's files for the exact compose wiring and any required environment variables (such as `ANTHROPIC_API_KEY` for the brute examples).
+Synapse comes up on `:8008`, with both services registered against it.
+
+## The shared Synapse stack
+
+`examples/synapse/` is a throwaway rig: SQLite in `/tmp`, a `modules/any_password.py` auth provider that accepts any password and registers the user on first login, and encryption off by default for locally-created rooms. Nothing in it is worth protecting — never expose it.
+
+Two registration files are mounted, one per service, each with its own id, tokens and `sender_localpart`.
+
+## `appservice/` — on a Rack stack
+
+Runs on [ratalada](https://github.com/n-at-han-k/ratalada)'s `async` backend. `Endpoint` returns a Rack triplet, so it goes straight into the router block.
+
+```ruby
+Server.run(host: "0.0.0.0", port: 9000) do |request|
+  Bridge::Endpoint.new(request.env, config: config, store: store) do |message|
+    case message
+    in {type: "m.room.member", content: {membership: "invite"}, room_id:, state_key: ^bot}
+      client.join_room(room_id)
+    in {type: "m.room.message", content: {msgtype: "m.text", body:}, room_id:, sender:} if sender != bot
+      client.send_notice(room_id, "Echo: #{body}")
+    else
+      nil
+    end
+  end
+end
+```
+
+Joins as `@agent:localhost` and answers `Echo: ...`.
+
+## `raw_appservice/` — no Rack at all
+
+A bare `Async::HTTP::Server`. Its Gemfile is a single gem: no ratalada, no protocol-rack, no falcon. The same `Endpoint` takes the `Protocol::HTTP::Request` and `#response` hands back a `Protocol::HTTP::Response`.
+
+```ruby
+server = Async::HTTP::Server.for(endpoint) do |request|
+  Bridge::Endpoint.new(request, config: config, store: store) do |message|
+    case message
+    in {type: "m.room.message", content: {msgtype: "m.text", body:}, room_id:, sender:} if sender != bot
+      client.send_notice(room_id, "Raw echo: #{body}")
+    else
+      nil
+    end
+  end.response
+end
+
+server.run
+```
+
+Joins as `@raw:localhost` and answers `Raw echo: ...`.
+
+The protocol is deliberately left to the endpoint rather than pinned to HTTP/2: a homeserver pushes transactions over HTTP/1.1 and will not do h2c with prior knowledge, so a forced-HTTP2 listener never receives an event.
+
+## Trying it
+
+Log in as any user with any password, invite both bots to an **unencrypted** room, and send a message — you get two replies, from two different server stacks.
+
+```bash
+matrix-commander --login password --homeserver http://localhost:8008 \
+  --user-login alice --password secret --device mc \
+  --credentials ./credentials.json --store ./store
+
+matrix-commander -c ./credentials.json -s ./store --room '!your:room' -m "hello"
+```
+
+Create the room through the Client-Server API rather than `matrix-commander --room-create`, which turns encryption on regardless of the server default.

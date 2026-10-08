@@ -5,9 +5,9 @@
 [![License](https://img.shields.io/github/license/general-intelligence-systems/async-matrix-bridge)](https://github.com/general-intelligence-systems/async-matrix-bridge/blob/main/LICENSE)
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.3-red)](https://www.ruby-lang.org)
 
-Async-native [Matrix](https://matrix.org) Application Service SDK for Ruby -- the server side of a bridge or bot. Built on [async-matrix](https://github.com/general-intelligence-systems/async-matrix) and the [Socketry](https://github.com/socketry) ecosystem (`async`, `async-http`, Falcon). No threads, no callbacks -- just fibers.
+Async-native [Matrix](https://matrix.org) Application Service SDK for Ruby -- the server side of a bridge or bot. Built on [async-matrix](https://github.com/general-intelligence-systems/async-matrix) and the [Socketry](https://github.com/socketry) ecosystem (`async`, `async-http`). No threads, no callbacks -- just fibers.
 
-Your homeserver `PUT`s transactions of events at your service; this gem authenticates them with a constant-time token compare, deduplicates them by transaction ID, and dispatches each event to the handlers you register. Calls back to the homeserver go through async-matrix's `Client`.
+Your homeserver `PUT`s transactions of events at your service; this gem authenticates them with a constant-time token compare, deduplicates them by transaction ID, and hands each event to a block you pattern match on -- concurrently, in its own fiber. Calls back to the homeserver go through async-matrix's `Client`.
 
 ## Usage
 
@@ -17,110 +17,162 @@ Please see the [project documentation](https://general-intelligence-systems.gith
 
 ```ruby
 gem "async-matrix-bridge"
-gem "falcon"      # the async Rack server you'll run the service on
+```
+
+An `Endpoint` is not a Rack app and needs no Rack server. Add one only if you
+want to run it in a Rack stack:
+
+```ruby
+gem "ratalada"        # plus protocol-rack, or falcon
+gem "protocol-rack"
 ```
 
 ## Quick Start
 
+The whole protocol is one class, and the events reach a block you pattern match
+on. There is no handler to register, no filter DSL and no base class.
+
 ```ruby
-# config.ru
 require "async/matrix/bridge"
+require "ratalada/async"
 
-config = Async::Matrix::Bridge::ApplicationService::Config.load("config/appservice.yml")
+Bridge = Async::Matrix::Bridge
+
+config = Bridge::Registration.load("/config/registration.yaml",
+  homeserver: "http://synapse:8008", domain: "localhost")
+
 client = Async::Matrix::Client.new(config)
+store = Bridge::TransactionStore.new
+bot = config.bot_mxid
 
-bot = Async::Matrix::Bridge::ApplicationService::Bot.new(client) do
-  on "m.room.member" do |event|
-    join_room(event.room_id) if event.content.membership == "invite"
-  end
-
-  on "m.room.message", msgtype: "m.text", not_from: :self do |event|
-    send_notice event.room_id, "Echo: #{event.content.body}"
+Server.run(host: "0.0.0.0", port: 9000) do |request|
+  Bridge::Endpoint.new(request.env, config: config, store: store) do |message|
+    case message
+    in {type: "m.room.member", content: {membership: "invite"}, room_id:, state_key: ^bot}
+      client.join_room(room_id)
+    in {type: "m.room.message", content: {msgtype: "m.text", body:}, room_id:, sender:} if sender != bot
+      client.send_notice(room_id, "Echo: #{body}")
+    else
+      nil
+    end
   end
 end
-
-app = Async::Matrix::Bridge::ApplicationService::Server.new(
-  hs_token: config.appservice.hs_token,
-  client:   client
-) do
-  dispatch bot
-end
-
-run app
 ```
 
-```bash
-falcon serve --bind http://0.0.0.0:9292
-```
+Working stacks with Synapse and Docker Compose live in
+[`examples/`](https://github.com/general-intelligence-systems/async-matrix-bridge/tree/main/examples).
 
-A complete working example with Docker Compose and Synapse lives in [`examples/echo_bot/`](https://github.com/general-intelligence-systems/async-matrix-bridge/tree/main/examples/echo_bot).
+## Pattern matching
 
-## Handlers
+The block is handed plain **symbol-keyed** Hashes. That is deliberate: Ruby's
+hash patterns match Symbol keys only, so `in {type: "m.room.message"}` would
+never match a `{"type" => ...}` parsed from JSON. Parsing with
+`symbolize_names` is what makes `case/in` destructure nested content with no
+`deconstruct_keys` on anything.
 
-Any object that responds to `#event_types` and `#call(event)` is a handler. Use this when you need more control than the Bot DSL provides.
+The filters that used to be DSL options are now ordinary pattern syntax -- a
+pin for "addressed to me", a guard for "not from me":
 
 ```ruby
-class Echo
-  def initialize(client) = @client = client
-
-  def event_types = ["m.room.message"]
-
-  def call(event)
-    return unless event.content&.msgtype == "m.text"
-    return unless event.sender != @client.config.bot_mxid
-    @client.send_notice(event.room_id, "Echo: #{event.content.body}")
-  end
-end
-
-app.dispatch(Echo.new(client))
+in {type: "m.room.member", content: {membership: "invite"}, state_key: ^bot}
+in {type: "m.room.message", content: {msgtype: "m.text", body:}, sender:} if sender != bot
 ```
 
-Dispatch is fault-tolerant -- one handler raising won't take down the rest.
-
-## Your own endpoints
-
-`Server` wraps a `Grape::API` and forwards the Grape route DSL, so app-specific endpoints land on the same API as the Matrix routes. The homeserver auth filter is scoped to the Matrix routes, so your endpoints are independent of it:
+Third-party protocol, location and user queries reach the same block as a
+`:query` Hash, so one `case` covers the whole protocol. Whatever it returns is
+the JSON body; `nil` is `M_NOT_FOUND`.
 
 ```ruby
-app = Async::Matrix::Bridge::ApplicationService::Server.new(
-  hs_token: config.appservice.hs_token,
-  client:   client
-) do
-  dispatch bot
+in {query: :protocol, protocol:}
+  {instances: instances_for(protocol)}
+```
 
-  post "/_webhook/send" do
-    client.send_text(params[:room_id], params[:body])
-    {ok: true}
+## Without Rack
+
+`Endpoint` takes either a Rack env or a `Protocol::HTTP::Request`, and answers
+with whichever response type the source implies. So the same class drops into a
+bare `Async::HTTP::Server` with no Rack anywhere in the stack:
+
+```ruby
+server = Async::HTTP::Server.for(endpoint) do |request|
+  Bridge::Endpoint.new(request, config: config, store: store) do |message|
+    case message
+    in {type: "m.room.message", content: {body:}, room_id:}
+      client.send_notice(room_id, "Echo: #{body}")
+    else
+      nil
+    end
+  end.response
+end
+```
+
+Do not pin the server to HTTP/2: homeservers push transactions over HTTP/1.1
+and will not do h2c with prior knowledge, so a forced-HTTP2 listener never
+receives an event.
+
+## Your own routes
+
+An `Endpoint` answers `404` for any path outside `/_matrix/app/v1`, so it works
+as the fall-through of a router that matches its own routes first. Ask
+`handled?` if you would rather compose explicitly.
+
+```ruby
+Server.run do |request|
+  case request
+  in ["GET", "/healthz"] then "ok\n"
+  else Bridge::Endpoint.new(request.env, config: config, store: store) { |message| ... }
   end
 end
 ```
 
-`Server::Grape` is a plain mix-in, so you can skip `Server` entirely and mix the Matrix routes into your own `Grape::API`.
+## Concurrency and retries
+
+The events of a transaction are dispatched in their own fibers, bounded by
+`concurrency:` (default 8), and all of them are awaited before the response.
+
+If the block raises, the response is `500` and the transaction id is **not**
+recorded, so the homeserver retries it. Recording it and answering `200` would
+make a failed handler drop its events permanently, since the retry would be
+deduplicated away.
 
 ## Configuration
 
-`Config` loads a mautrix bridgev2-compatible YAML file and validates it against a JSON Schema suite under `lib/async/matrix/bridge/application_service/config/schema/`, filling in every documented default:
+`Registration` reads the application service registration file -- the one your
+homeserver already loads -- and validates it against the Matrix spec's own
+schema, vendored verbatim from
+[matrix-org/matrix-spec](https://github.com/matrix-org/matrix-spec/tree/main/data/api/application-service/definitions).
+Nothing is restated: the tokens, the sender localpart and the namespaces are
+read from the file the homeserver reads.
 
 ```yaml
-# config/appservice.yml
-homeserver:
-  address: "http://synapse:8008"
-  domain: "localhost"
-
-appservice:
-  as_token: "your-appservice-token"
-  hs_token: "your-homeserver-token"
-  bot:
-    username: "bot"
+# registration.yaml -- give this to your homeserver
+id: agent
+url: "http://appservice:9000"
+as_token: "your-appservice-token"
+hs_token: "your-homeserver-token"
+sender_localpart: agent
+namespaces:
+  users:
+    - exclusive: false
+      regex: "@.*:localhost"
+  aliases: []
+  rooms: []
 ```
 
 ```ruby
-config = Async::Matrix::Bridge::ApplicationService::Config.load("config/appservice.yml")
-config.appservice.port   # => 29318 (schema default)
-config.bot_mxid          # => "@bot:localhost"
+config = Bridge::Registration.load("registration.yaml",
+  homeserver: "http://synapse:8008", domain: "localhost")
+
+config.bot_mxid                              # => "@agent:localhost"
+config.covers?(:users, "@alice:localhost")   # => true
+config.exclusive?(:users, "@alice:localhost") # => false
 ```
 
-You'll also need a [`registration.yml`](https://spec.matrix.org/latest/application-service-api/#registration) registered with your homeserver. See the [echo bot example](https://github.com/general-intelligence-systems/async-matrix-bridge/tree/main/examples/echo_bot) for a working template.
+`homeserver:` and `domain:` are separate arguments because a registration
+describes the service *to* the homeserver and so cannot carry the server's own
+address. `domain` is required rather than inferred from the URL: a
+`server_name` need not match the host it is served from, and a wrong guess
+yields plausible, broken MXIDs.
 
 ## Development
 
@@ -135,8 +187,7 @@ async-matrix is an ordinary RubyGems dependency -- it resolves from RubyGems lik
 
 - [async-matrix](https://github.com/general-intelligence-systems/async-matrix) -- the Matrix protocol layer (client, events, media, E2EE)
 - [async](https://github.com/socketry/async) -- fiber-based concurrency framework
-- [grape](https://github.com/ruby-grape/grape) -- the Rack API framework the Matrix routes mix into
-- [falcon](https://github.com/socketry/falcon) -- async Rack-compatible web server
+- [protocol-http](https://github.com/socketry/protocol-http) -- the HTTP semantics `Endpoint` answers in
 - [json_schemer](https://github.com/davishmcclurg/json_schemer) -- JSON Schema validation
 - [scampi](https://github.com/general-intelligence-systems/scampi) -- inline co-located test framework
 

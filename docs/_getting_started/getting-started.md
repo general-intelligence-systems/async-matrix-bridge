@@ -2,126 +2,116 @@
 layout: default
 title: Getting Started
 nav_order: 1
-description: Install async-matrix-bridge, register an application service with your homeserver, and run your first bot on Falcon.
+description: Install async-matrix-bridge, register an application service with your homeserver, and run your first bot.
 ---
 
 # Getting Started
 
-This guide installs async-matrix-bridge, wires a bot up to a homeserver via the Application Service API, and runs it on Falcon.
+This guide registers an application service with a homeserver and runs an echo bot against it.
 
 ## Requirements
 
 - Ruby >= 3.3
-- A Matrix homeserver you can register an application service with (e.g. [Synapse](https://github.com/element-hq/synapse))
+- A Matrix homeserver you can add a registration file to ([Synapse](https://github.com/element-hq/synapse), for example)
 
-## Installation
+## Install
 
 ```ruby
-# Gemfile
 gem "async-matrix-bridge"
-gem "falcon"      # the async Rack server you'll run the service on
 ```
 
-```sh
-bundle install
+An `Endpoint` is not a Rack app, so no Rack server is required. Add one only if you want to run inside a Rack stack:
+
+```ruby
+gem "ratalada"        # the DSL used below
+gem "protocol-rack"   # its Rack adapter
 ```
 
-## 1. Register the service with your homeserver
+## Register with the homeserver
 
-An application service is trusted code that runs *alongside* your homeserver. The homeserver needs a `registration.yml` describing your service and the two shared secrets that authenticate traffic in each direction:
+Write a registration file. The tokens are secrets you invent; generate them with `SecureRandom.urlsafe_base64(32)`.
 
 ```yaml
-# registration.yml — hand this to your homeserver
-id: "echo"
-url: "http://echo:9292"                     # where the homeserver reaches your service
-as_token: "long-random-string-A"            # your service -> homeserver
-hs_token: "long-random-string-B"            # homeserver -> your service
-sender_localpart: "bot"
+# registration.yaml
+id: agent
+url: "http://appservice:9000"
+as_token: "..."
+hs_token: "..."
+sender_localpart: agent
 namespaces:
   users:
-    - exclusive: true
-      regex: "@bot:.*"
+    - exclusive: false
+      regex: "@.*:localhost"
+  aliases: []
+  rooms: []
 ```
 
-Point your homeserver at it (Synapse: add the path to `app_service_config_files` in `homeserver.yaml`) and restart.
-
-{: .note }
-The `as_token` authenticates *your* calls to the homeserver; the `hs_token` authenticates the homeserver's transactions to *you*. async-matrix-bridge uses a constant-time compare on the `hs_token` for every inbound transaction.
-
-## 2. Configure the service
-
-async-matrix-bridge loads its own YAML config, validated against a JSON-Schema suite (see [Configuration]({% link _advanced/configuration.md %})):
+Point the homeserver at it. In Synapse's `homeserver.yaml`:
 
 ```yaml
-# config/appservice.yml
-homeserver:
-  address: "http://synapse:8008"
-  domain: "localhost"
-
-appservice:
-  as_token: "long-random-string-A"
-  hs_token: "long-random-string-B"
-  bot:
-    username: "bot"
+app_service_config_files:
+  - /config/registration.yaml
 ```
 
-## 3. Write the bot
+Synapse reads registrations at startup only, so restart it. Note also that `url` must not contain an underscore — Synapse's IDNA handling rejects underscores in hostnames.
 
-The [`Bot` DSL]({% link _core_features/bots-and-handlers.md %}) pairs a `Client` with event handlers. Blocks run in a context that exposes helpers like `send_notice` and `join_room`, so you rarely touch the client directly:
+## The service
 
 ```ruby
-# config.ru
+#!/usr/bin/env ruby
 require "async/matrix/bridge"
+require "ratalada/async"
 
-config = Async::Matrix::Bridge::ApplicationService::Config.load("config/appservice.yml")
+Bridge = Async::Matrix::Bridge
+
+config = Bridge::Registration.load("/config/registration.yaml",
+  homeserver: "http://synapse:8008",
+  domain: "localhost")
+
 client = Async::Matrix::Client.new(config)
+store = Bridge::TransactionStore.new
+bot = config.bot_mxid
 
-bot = Async::Matrix::Bridge::ApplicationService::Bot.new(client) do
-  # Auto-join whenever someone invites the bot.
-  on "m.room.member" do |event|
-    join_room(event.room_id) if event.content.membership == "invite"
-  end
-
-  # Echo text messages back as a notice, skipping the bot's own messages.
-  on "m.room.message", msgtype: "m.text", not_from: :self do |event|
-    send_notice event.room_id, "Echo: #{event.content.body}"
+Server.run(host: "0.0.0.0", port: 9000) do |request|
+  Bridge::Endpoint.new(request.env, config: config, store: store) do |message|
+    case message
+    in {type: "m.room.member", content: {membership: "invite"}, room_id:, state_key: ^bot}
+      client.join_room(room_id)
+    in {type: "m.room.message", content: {msgtype: "m.text", body:}, room_id:, sender:} if sender != bot
+      client.send_notice(room_id, "Echo: #{body}")
+    else
+      nil
+    end
   end
 end
-
-app = Async::Matrix::Bridge::ApplicationService::Server.new(
-  hs_token: config.appservice.hs_token,
-  client:   client
-) do
-  dispatch bot
-end
-
-run app
 ```
 
-`dispatch` accepts a `Bot` or any plain handler object — see [Bots and Handlers]({% link _core_features/bots-and-handlers.md %}) for the duck-type contract and filter options.
+Run it with `ruby appservice.rb`.
 
-## 4. Serve it
+## Check it
 
-`Server` is a Rack app, so any async-capable Rack server works. Use Falcon:
+The healthcheck needs no authentication:
 
-```sh
-falcon serve --bind http://0.0.0.0:9292
+```bash
+curl -i -X POST http://localhost:9000/_matrix/app/v1/ping        # 200 {}
 ```
 
-Override the config path at runtime with an environment variable:
+An unauthenticated transaction must be refused:
 
-```sh
-APPSERVICE_CONFIG=/etc/bot/appservice.yml falcon serve --bind http://0.0.0.0:9292
+```bash
+curl -i -X PUT -d '{}' -H 'content-type: application/json' \
+  http://localhost:9000/_matrix/app/v1/transactions/1           # 403 M_FORBIDDEN
 ```
 
-Invite `@bot:localhost` to a room and say hello — it echoes back.
+Then invite `@agent:localhost` to a room and say something. The bot joins on the invite and echoes the message.
 
-## What happens on each transaction
+## Encryption
 
-1. The homeserver `PUT`s a batch of events to `/_matrix/app/v1/transactions/{txnId}`.
-2. The `Server` authenticates the request (constant-time `hs_token` compare) and rejects anything unauthenticated with `403 M_FORBIDDEN`.
-3. The transaction ID is checked against an in-memory store; already-seen IDs return `200` immediately without re-dispatching — the endpoint is idempotent.
-4. Each event is wrapped and routed to every handler whose `#event_types` matches. Handlers run independently; an exception in one is logged and the rest still run.
-5. Your handler calls back to the homeserver through the [`Client`](https://general-intelligence-systems.github.io/async-matrix/client/) — every call a fiber operation over a pooled connection.
+The bot has no crypto, so an encrypted room delivers undecryptable `m.room.encrypted` events and nothing will echo. Create an unencrypted room for testing — note that some clients enable encryption on room creation regardless of the server's default.
 
-Next: the [Application Service internals]({% link _core_features/application-service.md %}), or jump to a complete [Docker Compose example]({% link _examples/examples.md %}).
+## Next
+
+- [Application Service]({% link _core_features/application-service.md %}) — routes, idempotency, concurrency, retries
+- [Pattern Matching]({% link _core_features/pattern-matching.md %}) — the matcher block in depth
+- [Configuration]({% link _advanced/configuration.md %}) — `Registration` and its schema
+- [Examples]({% link _examples/examples.md %}) — runnable Docker Compose stacks

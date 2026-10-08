@@ -1,0 +1,8 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+# Endpoint speaks Protocol::HTTP directly, so this example needs no Rack at
+# all -- no ratalada, no protocol-rack, no falcon. async-http arrives with
+# async-matrix, which async-matrix-bridge depends on.
+gem "async-matrix-bridge", path: "/gem"

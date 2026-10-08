@@ -23,6 +23,7 @@ signing_key_path: /config/signing.key
 # Blank app service registration, for the agent bridge to fill in.
 app_service_config_files:
   - /config/appservice-agent.yaml
+  - /config/appservice-raw.yaml
 
 # Any user, any password, created on login -- so there is no user setup. A
 # throwaway rig; see /config/modules/any_password.py.
