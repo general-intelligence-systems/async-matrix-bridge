@@ -27,6 +27,43 @@
           cp ${./lib/async/matrix/bridge/version.rb} $out/lib/async/matrix/bridge/version.rb
         '';
 
+        # async-matrix carries a Rust (vodozemac) extension. bundix records the
+        # generic "ruby" platform gem, which is the source gem, so bundlerEnv
+        # runs its extconf and the build dies on `cargo: not found` — and even
+        # with cargo added it would die fetching crates, since the gem ships no
+        # vendored registry and the sandbox has no network.
+        #
+        # So point this one gem at the precompiled platform gem instead, which
+        # already contains the built .so and skips extconf entirely.
+        # buildRubyGem takes a `platform` argument and bundlerEnv passes any
+        # attribute it does not recognise straight through to it.
+        #
+        # REFRESH ON EVERY async-matrix BUMP:
+        #   nix-prefetch-url https://rubygems.org/gems/async-matrix-<version>-<platform>.gem
+        asyncMatrixGems = {
+          "x86_64-linux" = { platform = "x86_64-linux"; sha256 = "1mkh53si27a03q7h2fk4x2gknbp1lz8d2l5pc6b16c3h1wxz8fdr"; };
+          "aarch64-linux" = { platform = "aarch64-linux"; sha256 = "11176kcy4diypz7p3fl5hhlj7kni2bqlihh7qmz4vdw07khr74py"; };
+          "x86_64-darwin" = { platform = "x86_64-darwin"; sha256 = "05pxc85rrzri5vwp4cgz20lx7cab7flpykmv4ddi7gb1x3py5sk1"; };
+          "aarch64-darwin" = { platform = "arm64-darwin"; sha256 = "1rz40bsswi1nw33asb3270icgll8kv34jzb6x4iw182shj54fdbb"; };
+        };
+
+        asyncMatrixGem = asyncMatrixGems.${system} or null;
+
+        gemsetAttrs = import ./gemset.nix;
+
+        gemset =
+          if asyncMatrixGem == null then
+            gemsetAttrs
+          else
+            gemsetAttrs // {
+              async-matrix = gemsetAttrs.async-matrix // {
+                platform = asyncMatrixGem.platform;
+                source = gemsetAttrs.async-matrix.source // {
+                  sha256 = asyncMatrixGem.sha256;
+                };
+              };
+            };
+
         # mine.lib.buildGemset would be the one-liner here, but it has no way
         # to pass extraConfigPaths through to bundlerEnv.
         gems = pkgs.bundlerEnv {
@@ -34,7 +71,7 @@
           ruby = pkgs.ruby_3_4;
           gemfile = ./Gemfile;
           lockfile = ./Gemfile.lock;
-          gemset = ./gemset.nix;
+          inherit gemset;
           extraConfigPaths = [
             ./async-matrix-bridge.gemspec
             "${gemspecVersion}/lib"
