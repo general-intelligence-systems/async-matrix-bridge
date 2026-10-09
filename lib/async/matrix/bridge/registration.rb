@@ -11,39 +11,9 @@ require "yaml"
 module Async
   module Matrix
     module Bridge
-      # The application service registration file, as the Matrix spec defines it.
-      #
-      # This is the file you hand the homeserver -- Synapse lists it under
-      # +app_service_config_files+ -- so it is already the authoritative record
-      # of the tokens, the sender localpart and the namespaces. Reading it
-      # directly means there is nothing to restate:
-      #
-      #   config = Registration.load("/config/appservice-agent.yaml",
-      #     homeserver: "http://synapse:8008", domain: "localhost")
-      #
-      #   client = Async::Matrix::Client.new(config)
-      #   Endpoint.new(request.env, config: config, store: store) { ... }
-      #
-      # Validation runs against the spec's own schema, vendored verbatim under
-      # registration/schema/ from matrix-org/matrix-spec
-      # (data/api/application-service/definitions/). Those files are already
-      # JSON Schema draft 2020-12, which is what json_schemer speaks, so they
-      # are used as published rather than transcribed -- only the relative $ref
-      # is repointed at the .json sibling. Synapse validates the same file by
-      # hand in synapse/config/appservice.py#_load_appservice and ships no
-      # schema of its own, so the spec is the only machine-readable source.
-      #
-      # The registration deliberately says nothing about where the homeserver
-      # is: it describes the application service *to* the homeserver, so the
-      # address is the one thing it cannot carry. +homeserver:+ and +domain:+
-      # supply it, and +domain+ is required rather than guessed from the URL
-      # because a server_name need not match the host it is served from -- and
-      # a wrong guess yields plausible, broken MXIDs.
       class Registration
         SCHEMA_DIR = Pathname.new(__dir__).join("registration", "schema").freeze
 
-        # The surface Async::Matrix::Client and {Endpoint} read, so a
-        # Registration stands in for a {Config} without being one.
         Homeserver = Struct.new(:address, :domain)
 
         Appservice = Struct.new(:as_token, :hs_token, :sender_localpart)
@@ -105,14 +75,10 @@ module Async
 
         def protocols = @raw["protocols"] || []
 
-        # Both default to false per the spec; Synapse treats a missing
-        # rate_limited as true, but that governs the homeserver's behaviour
-        # towards us, not ours, so the spec default is what is reported here.
         def rate_limited? = @raw.fetch("rate_limited", false)
 
         def receive_ephemeral? = @raw.fetch("receive_ephemeral", false)
 
-        # Namespace regexes for one of users/rooms/aliases.
         def namespaces(kind)
           unless NAMESPACES.include?(kind.to_s)
             raise ArgumentError, "unknown namespace #{kind.inspect}; expected one of #{NAMESPACES.join(", ")}"
@@ -121,7 +87,6 @@ module Async
           @raw.fetch("namespaces", {}).fetch(kind.to_s, [])
         end
 
-        # True when a value falls in one of this registration's namespaces.
         def covers?(kind, value)
           namespaces(kind).any? { |entry| Regexp.new(entry["regex"]).match?(value) }
         end
@@ -159,8 +124,6 @@ __END__
       }
     end
 
-    # True when the schema rejected the data, so a spec can assert on it
-    # rather than relying on a bare raise (which registers no assertion).
     def rejected?(data)
       Registration.new(data, homeserver: "http://hs", domain: "d")
       false
@@ -179,8 +142,6 @@ __END__
       registration.sender_localpart.should == "agent"
     end
 
-    # The surface Async::Matrix::Client and Endpoint read, so a Registration
-    # stands in for a Config at both call sites.
     it "presents the config surface a Client and an Endpoint need" do
       registration = build
       registration.homeserver.address.should == "http://synapse:8008"
@@ -194,17 +155,12 @@ __END__
         .bot_mxid.should == "@agent:example.org"
     end
 
-    # --- Spec schema validation ---
-
     it "requires the spec's required fields" do
       ["id", "as_token", "hs_token", "sender_localpart", "namespaces"].map do |field|
         rejected?(valid_data.reject { |k, _| k == field })
       end.should == [true, true, true, true, true]
     end
 
-    # The spec types url as ["null", "string"] and still lists it as required,
-    # which is the same rule Synapse enforces by hand: present, possibly null,
-    # never missing -- so push cannot be disabled by omission.
     it "requires url to be present but allows an explicit null" do
       build("url" => nil).url.should == nil
 
@@ -220,8 +176,6 @@ __END__
     it "rejects a non-string id" do
       rejected?(valid_data.merge("id" => 42)).should == true
     end
-
-    # --- Namespaces ---
 
     it "reports whether a value falls in a namespace" do
       registration = build
@@ -251,8 +205,6 @@ __END__
       error.class.should == ArgumentError
     end
 
-    # --- Optional flags ---
-
     it "defaults the spec's optional booleans to false" do
       registration = build
       registration.receive_ephemeral?.should == false
@@ -263,8 +215,6 @@ __END__
     it "reads receive_ephemeral when set" do
       build("receive_ephemeral" => true).receive_ephemeral?.should == true
     end
-
-    # --- Loading ---
 
     it "loads from a YAML file" do
       file = Tempfile.new(["registration", ".yaml"])

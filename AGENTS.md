@@ -172,8 +172,10 @@ Do not reintroduce any of it. If something genuinely needs the mautrix config sh
 `examples/` holds one Docker Compose stack with two services, both the same echo bot on different servers:
 
 - `synapse/` — throwaway Synapse: SQLite in `/tmp`, an `any_password.py` module that registers any user on first login, encryption off by default. Two registration files, one per service.
-- `appservice/` — on ratalada's `async` backend. `Endpoint` returns a Rack triplet straight from the router block.
+- `appservice/` — on ratalada 4's `async` backend, which routes in Protocol::HTTP, so the `Server.run` block is handed the server's own `Protocol::HTTP::Request` and there is no `request.env`. What it demonstrates over `raw_appservice/` is the router DSL and the `Server.use` middleware chain, not a different protocol. `protocol-rack` must still be in the Gemfile despite nothing adapting: `lib/ratalada/async.rb` requires `protocol/rack/adapter` unconditionally and ratalada does not depend on it, so omitting it is a `LoadError` at boot. Pass `Server.run(frontend: Ratalada::Frontends::Routes, ...)` to get the rack router — and `request.env` — back.
 - `raw_appservice/` — a bare `Async::HTTP::Server`. Its Gemfile is one gem: no ratalada, no protocol-rack, no falcon.
+
+Both examples therefore exercise `Endpoint`'s Protocol::HTTP input. The Rack-env input is covered by the inline specs only, so do not break it on the assumption nothing uses it — any Rack server (falcon, puma) and any rack ratalada frontend still goes down that path.
 
 Both Dockerfiles build with the **repo root** as context and copy the working tree to `/gem`, because `async-matrix-bridge` is not published — the example Gemfiles use `path: "/gem"`.
 

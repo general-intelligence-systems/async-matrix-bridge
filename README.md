@@ -9,10 +9,6 @@ Async-native [Matrix](https://matrix.org) Application Service SDK for Ruby -- th
 
 Your homeserver `PUT`s transactions of events at your service; this gem authenticates them with a constant-time token compare, deduplicates them by transaction ID, and hands each event to a block you pattern match on -- concurrently, in its own fiber. Calls back to the homeserver go through async-matrix's `Client`.
 
-## Usage
-
-Please see the [project documentation](https://general-intelligence-systems.github.io/async-matrix-bridge/) for more details.
-
 ## Install
 
 ```ruby
@@ -23,7 +19,7 @@ An `Endpoint` is not a Rack app and needs no Rack server. Add one only if you
 want to run it in a Rack stack:
 
 ```ruby
-gem "ratalada"        # plus protocol-rack, or falcon
+gem "ratalada", "~> 4.0"
 gem "protocol-rack"
 ```
 
@@ -46,7 +42,7 @@ store = Bridge::TransactionStore.new
 bot = config.bot_mxid
 
 Server.run(host: "0.0.0.0", port: 9000) do |request|
-  Bridge::Endpoint.new(request.env, config: config, store: store) do |message|
+  Bridge::Endpoint.new(request, config: config, store: store) do |message|
     case message
     in {type: "m.room.member", content: {membership: "invite"}, room_id:, state_key: ^bot}
       client.join_room(room_id)
@@ -55,9 +51,12 @@ Server.run(host: "0.0.0.0", port: 9000) do |request|
     else
       nil
     end
-  end
+  end.response
 end
 ```
+
+`Endpoint` also accepts a Rack env, so the same block works under any Rack
+server — pass `request.env` there instead.
 
 Working stacks with Synapse and Docker Compose live in
 [`examples/`](https://github.com/general-intelligence-systems/async-matrix-bridge/tree/main/examples).
@@ -120,7 +119,7 @@ as the fall-through of a router that matches its own routes first. Ask
 Server.run do |request|
   case request
   in ["GET", "/healthz"] then "ok\n"
-  else Bridge::Endpoint.new(request.env, config: config, store: store) { |message| ... }
+  else Bridge::Endpoint.new(request, config: config, store: store) { |message| ... }.response
   end
 end
 ```

@@ -1,35 +1,19 @@
 PATH
   remote: .
   specs:
-    async-matrix-bridge (1.0.0)
+    async-matrix-bridge (2.0.0)
       async (~> 2.46)
       async-matrix (~> 3.0)
-      grape (~> 4.0)
       json_schemer (~> 2.5)
 
 GEM
   remote: https://rubygems.org/
   specs:
-    activesupport (8.1.4)
-      base64
-      bigdecimal
-      concurrent-ruby (~> 1.0, >= 1.3.1)
-      connection_pool (>= 2.2.5)
-      drb
-      i18n (>= 1.6, < 2)
-      json
-      logger (>= 1.4.2)
-      minitest (>= 5.1)
-      securerandom (>= 0.3)
-      tzinfo (~> 2.0, >= 2.0.5)
-      uri (>= 0.13.1)
     ast (2.4.3)
     async (2.46.0)
       console (~> 1.29)
       fiber-annotation
       io-event (~> 1.21)
-    async-container (0.38.0)
-      async (~> 2.44)
     async-http (0.105.0)
       async (>= 2.35.1)
       async-pool (~> 0.12)
@@ -39,8 +23,6 @@ GEM
       protocol-http1 (~> 0.41)
       protocol-http2 (~> 0.28)
       protocol-url (~> 0.2)
-    async-http-cache (0.4.6)
-      async-http (~> 0.56)
     async-matrix (3.0.0)
       async (~> 2.46)
       async-http (~> 0.105)
@@ -89,57 +71,11 @@ GEM
       string_builder (~> 1.2)
     async-pool (0.12.0)
       async (>= 2.0)
-    async-service (0.25.0)
-      async
-      async-container (~> 0.34)
-      string-format (~> 0.2)
-    async-utilization (0.5.0)
-      console (~> 1.0)
-    bake (0.25.0)
-      bigdecimal
-      samovar (~> 2.1)
-    base64 (0.3.0)
     bigdecimal (4.1.3)
-    concurrent-ruby (1.3.8)
-    connection_pool (3.0.2)
     console (1.38.0)
       fiber-annotation
       fiber-local (~> 1.1)
       json
-    drb (2.2.3)
-    dry-configurable (1.4.0)
-      dry-core (~> 1.0)
-      zeitwerk (~> 2.6)
-    dry-core (1.2.0)
-      concurrent-ruby (~> 1.0)
-      logger
-      zeitwerk (~> 2.6)
-    dry-inflector (1.3.1)
-    dry-logic (1.6.0)
-      bigdecimal
-      concurrent-ruby (~> 1.0)
-      dry-core (~> 1.1)
-      zeitwerk (~> 2.6)
-    dry-types (1.9.1)
-      bigdecimal (>= 3.0)
-      concurrent-ruby (~> 1.0)
-      dry-core (~> 1.0)
-      dry-inflector (~> 1.0)
-      dry-logic (~> 1.4)
-      zeitwerk (~> 2.6)
-    falcon (0.57.0)
-      async
-      async-container (~> 0.20)
-      async-http (~> 0.97)
-      async-http-cache (~> 0.4)
-      async-service (~> 0.19)
-      async-utilization (~> 0.3)
-      bundler
-      localhost (~> 1.1)
-      openssl (>= 3.0)
-      protocol-http (~> 0.31)
-      protocol-rack (~> 0.7)
-      samovar (~> 2.3)
     fiber-annotation (0.2.0)
     fiber-local (1.1.0)
       fiber-storage
@@ -148,16 +84,7 @@ GEM
     gem_kit-release (0.3.2)
       gem_kit (>= 0.1, < 1.0)
       thor (~> 1.3)
-    grape (4.0.1)
-      activesupport (>= 7.2)
-      dry-configurable (>= 1.0)
-      dry-types (>= 1.1)
-      mustermann (>= 4.0)
-      rack (>= 2.2.4)
-      zeitwerk (>= 2.6)
     hana (1.3.7)
-    i18n (1.15.2)
-      concurrent-ruby (~> 1.0)
     io-endpoint (0.19.0)
       openssl (>= 3.3.0)
     io-event (1.22.1)
@@ -172,13 +99,7 @@ GEM
     language_server-protocol (3.17.0.6)
     lefthook (2.2.1)
     lint_roller (1.1.0)
-    localhost (1.8.0)
-      bake
     logger (1.7.0)
-    minitest (6.0.6)
-      drb (~> 2.0)
-      prism (~> 1.5)
-    mustermann (4.0.0)
     openssl (4.0.2)
     parallel (2.3.0)
     parser (3.3.12.0)
@@ -192,14 +113,8 @@ GEM
     protocol-http2 (0.29.1)
       protocol-hpack (~> 1.4)
       protocol-http (~> 0.62)
-    protocol-rack (0.23.0)
-      console (~> 1.0)
-      io-stream (>= 0.10)
-      protocol-http (~> 0.58)
-      rack (>= 1.0)
     protocol-url (0.19.0)
     racc (1.8.1)
-    rack (3.2.7)
     rainbow (3.1.1)
     rake-compiler-dock (1.12.0)
     rb_sys (0.9.130)
@@ -220,21 +135,13 @@ GEM
       parser (>= 3.3.7.2)
       prism (~> 1.7)
     ruby-progressbar (1.13.0)
-    samovar (2.5.1)
-      console (~> 1.0)
     scampi (1.0.0)
-    securerandom (0.4.1)
     simpleidn (0.3.0)
-    string-format (0.2.0)
     string_builder (1.2.4)
     thor (1.5.0)
-    tzinfo (2.0.6)
-      concurrent-ruby (~> 1.0)
     unicode-display_width (3.3.0)
       unicode-emoji (~> 4.3)
     unicode-emoji (4.3.0)
-    uri (1.1.2)
-    zeitwerk (2.8.3)
 
 PLATFORMS
   aarch64-linux
@@ -249,11 +156,9 @@ PLATFORMS
 
 DEPENDENCIES
   async-matrix-bridge!
-  falcon (~> 0.57)
   gem_kit-release (~> 0.3)
   lefthook (~> 2.2)
   logger
-  rack (~> 3.0)
   rubocop
   scampi (~> 1.0)
 
