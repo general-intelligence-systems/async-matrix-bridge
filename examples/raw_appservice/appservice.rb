@@ -21,24 +21,29 @@ endpoint = Async::HTTP::Endpoint.parse(
   reuse_port: true
 )
 
-Async do
-  client = Async::Matrix::Client.new(config)
-  bot = config.bot_mxid
+client = Async::Matrix::Client.new(config)
+store = Bridge::TransactionStore.new
+bot = config.bot_mxid
 
+Async do
   Console.info(self) { "Raw appservice #{config.id} listening as #{bot}" }
 
-  appservice = Bridge::Endpoint.new(config: config, store: Bridge::TransactionStore.new) do |message|
-    case message
-    in {type: "m.room.member", content: {membership: "invite"}, room_id:, state_key: ^bot}
-      client.join_room(room_id)
-    in {type: "m.room.message", content: {msgtype: "m.text", body:}, room_id:, sender:} if sender != bot
-      client.send_notice(room_id, "Raw echo: #{body}")
-    else
-      nil
+  app = Protocol::Rack::Adapter.new(
+    Bridge::Endpoint.new(config: config, store: store) do |message|
+      case message
+      in {type: "m.room.member", content: {membership: "invite"}, room_id:, state_key: ^bot}
+        client.join_room(room_id)
+      in {type: "m.room.message", content: {msgtype: "m.text", body:}, room_id:, sender:} if sender != bot
+        client.send_notice(room_id, "Raw echo: #{body}")
+      else
+        nil
+      end
     end
-  end
+  )
 
-  server = Async::HTTP::Server.new(Protocol::Rack::Adapter.new(appservice), endpoint)
+  server = Async::HTTP::Server.for(endpoint) do |request|
+    app.call(request)
+  end
 
   server.run
 end
