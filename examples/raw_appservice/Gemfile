@@ -1,7 +1,0 @@
-# frozen_string_literal: true
-
-source "https://rubygems.org"
-
-gem "async-matrix-bridge", path: "/gem"
-
-gem "protocol-rack"
