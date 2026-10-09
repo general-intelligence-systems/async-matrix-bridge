@@ -1,57 +1,75 @@
 # Changelog
 
-## v2.0.0
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [2.0.0] - 2026-10-09
 
 A ground-up replacement of the application service API. Everything is now one
-class, `Endpoint`, driven by Ruby pattern matching, plus `Registration` for
-configuration. The Grape-and-handler-objects stack is gone.
-
-### Breaking
-
-- **Namespace flattened.** `Async::Matrix::Bridge::ApplicationService::*` →
-  `Async::Matrix::Bridge::*`. The three classes sit directly on `Bridge`:
-  `Bridge::Endpoint`, `Bridge::Registration`, `Bridge::TransactionStore`. There
-  is no sub-namespace because there is nothing to distinguish it from — the gem
-  is the appservice protocol and nothing else. Bridge *domain* concepts
-  (portals, ghosts, provisioning) would be new peers if they ever arrive, and
-  the remote-network half of a bridge is inherently application-specific.
-
-- **Removed** `Server`, `Server::Grape`, `Bot`, `Bot::Handler`, `Bot::Context`,
-  `Dispatcher`, `TransactionHandler` and `Transaction`. `Endpoint` replaces all
-  of them. The `#event_types`/`#call` handler duck-type, the `on` DSL with its
-  `msgtype:`/`not_from:` filters, handler registration and the `thirdparty`
-  duck-type are all gone: filtering is now `case/in` with guards, and the
-  long-standing `Dispatcher`/`TransactionHandler` double-naming is resolved by
-  deleting both.
-
-- **Removed** `Config` and its 17-file mautrix bridgev2 JSON Schema suite.
-  `Registration` replaces it, validating the application service registration
-  file against the Matrix spec's own schema. Configuration a registration does
-  not describe — `database`, `encryption`, `permissions`, `backfill` — is no
-  longer modelled here; `Config` remains available at the `v1.0.0` tag.
-
-- **Grape is no longer a dependency.** `Endpoint` speaks Rack and
-  Protocol::HTTP directly.
+class, `Bridge::Endpoint`, driven by Ruby pattern matching, plus
+`Bridge::Registration` for configuration. The Grape-and-handler-objects stack
+is gone.
 
 ### Added
 
-- `Bridge::Endpoint` — the whole protocol in one class. Built per request
-  from a Rack env *or* a `Protocol::HTTP::Request`, returning the matching
-  response type, so it serves a Rack stack and a bare `Async::HTTP::Server`
-  equally. Events reach a block as symbol-keyed Hashes, because Ruby hash
-  patterns match Symbol keys only — which is what lets `case/in` destructure
-  nested `content:` with no `deconstruct_keys` anywhere.
+- `Bridge::Endpoint` — the whole AS wire protocol in one class. Built per
+  request from a Rack env *or* a `Protocol::HTTP::Request`, returning the
+  matching response type, so it serves a Rack stack and a bare
+  `Async::HTTP::Server` equally. It also defines `to_ary` so it can be
+  returned straight from a Rack router block, and `handled?` so it works as a
+  router's fall-through. Events reach the matcher block as symbol-keyed
+  Hashes, because Ruby hash patterns match Symbol keys only — which is what
+  lets `case/in` destructure nested `content:` with no `deconstruct_keys`
+  anywhere.
 
 - Concurrent dispatch. The events of a transaction run in their own fibers
   under a bounded `Async::Semaphore` (`concurrency:`, default 8) and are all
-  awaited before the response, instead of running sequentially inline.
+  awaited before the response, instead of running sequentially inline. Outside
+  a reactor dispatch falls back to sequential so the endpoint still works
+  under `Rack::MockRequest`.
 
 - `Bridge::Registration` — the registration file, validated against
-  `registration.json` and `namespace_list.json`, vendored verbatim from
+  `registration.json` and `namespace_list.json` vendored verbatim from
   matrix-org/matrix-spec (`data/api/application-service/definitions/`). Those
   are already JSON Schema draft 2020-12. Synapse ships no schema for this file
-  — it validates by hand in `synapse/config/appservice.py` — so the spec is the
-  only machine-readable source. Exposes `covers?`/`exclusive?` for namespaces.
+  — it validates by hand in `synapse/config/appservice.py` — so the spec is
+  the only machine-readable source. Takes `homeserver:` and `domain:` as
+  required arguments and exposes `covers?`/`exclusive?` for namespaces.
+
+### Changed
+
+- **Namespace flattened.** `Async::Matrix::Bridge::ApplicationService::*` →
+  `Async::Matrix::Bridge::*`. The three classes sit directly on `Bridge`:
+  `Bridge::Endpoint`, `Bridge::Registration`, `Bridge::TransactionStore`.
+  There is no sub-namespace because there is nothing to distinguish it from
+  — the gem is the appservice protocol and nothing else. Bridge *domain*
+  concepts (portals, ghosts, provisioning) would be new peers if they ever
+  arrive, and the remote-network half of a bridge is inherently
+  application-specific.
+
+### Removed
+
+- `Server`, `Server::Grape`, `Bot`, `Bot::Handler`, `Bot::Context`,
+  `Dispatcher`, `TransactionHandler` and `Transaction`. `Bridge::Endpoint`
+  replaces all of them. The `#event_types`/`#call` handler duck-type, the
+  `on` DSL with its `msgtype:`/`not_from:` filters, handler registration and
+  the `thirdparty` duck-type are all gone: filtering is now `case/in` with
+  guards, and the long-standing `Dispatcher`/`TransactionHandler`
+  double-naming is resolved by deleting both.
+
+- `Config` and its 17-file mautrix bridgev2 JSON Schema suite.
+  `Bridge::Registration` replaces it, validating the application service
+  registration file against the Matrix spec's own schema. Configuration a
+  registration does not describe — `database`, `encryption`, `permissions`,
+  `backfill` — is no longer modelled here; `Config` remains available at the
+  `v1.0.0` tag.
+
+- Grape is no longer a dependency. `Bridge::Endpoint` speaks Rack and
+  Protocol::HTTP directly.
 
 ### Fixed
 
@@ -62,7 +80,7 @@ configuration. The Grape-and-handler-objects stack is gone.
   transaction parsed as `{}` and dispatched nothing while answering `200`. It
   went unnoticed because `Rack::MockRequest` supplies a rewindable `StringIO`.
 
-- **A failing handler lost its events permanently.** The dispatcher logged the
-  exception, recorded the transaction id and returned `200`, so the homeserver's
-  retry was deduplicated away. `Endpoint` answers `500` and does not record the
-  id, leaving the transaction retryable.
+- **A failing handler lost its events permanently.** The dispatcher logged
+  the exception, recorded the transaction id and returned `200`, so the
+  homeserver's retry was deduplicated away. `Bridge::Endpoint` answers `500`
+  and does not record the id, leaving the transaction retryable.
