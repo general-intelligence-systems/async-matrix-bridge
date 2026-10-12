@@ -32,15 +32,25 @@
     version = "0.105.0";
   };
   async-matrix = {
-    dependencies = ["async" "async-http" "json_schemer" "rb_sys" "string_builder"];
+    dependencies = ["async-rest" "base64" "console" "gem_kit" "vodozemac"];
     groups = ["default"];
     platforms = [];
     source = {
       remotes = ["https://rubygems.org"];
-      sha256 = "15m8s41rh1z35s9flriy4j3wr5pgviddfgrjpk2a9zfgf05kmghr";
+      sha256 = "1fxnf1g8x6b883q6l6bnj3xija148pa93mfp48ajkxbd8qawcinx";
       type = "gem";
     };
-    version = "3.0.0";
+    version = "4.0.0";
+  };
+  async-matrix-bridge = {
+    dependencies = ["async" "async-matrix" "json_schemer"];
+    groups = ["default"];
+    platforms = [];
+    source = {
+      path = ./.;
+      type = "path";
+    };
+    version = "2.0.0";
   };
   async-pool = {
     dependencies = ["async"];
@@ -52,6 +62,27 @@
       type = "gem";
     };
     version = "0.12.0";
+  };
+  async-rest = {
+    dependencies = ["async-http" "protocol-url"];
+    groups = ["default"];
+    platforms = [];
+    source = {
+      remotes = ["https://rubygems.org"];
+      sha256 = "1swmgq79knydk05ylkhv43x4l6yqyclbh4pwchxaasajyrkx9c3j";
+      type = "gem";
+    };
+    version = "0.20.0";
+  };
+  base64 = {
+    groups = ["default"];
+    platforms = [];
+    source = {
+      remotes = ["https://rubygems.org"];
+      sha256 = "0yx9yn47a8lkfcjmigk79fykxvr80r4m1i35q82sxzynpbm7lcr7";
+      type = "gem";
+    };
+    version = "0.3.0";
   };
   bigdecimal = {
     groups = ["default" "development"];
@@ -425,16 +456,6 @@
     };
     version = "0.3.0";
   };
-  string_builder = {
-    groups = ["default"];
-    platforms = [];
-    source = {
-      remotes = ["https://rubygems.org"];
-      sha256 = "14ck60j7zp1vbw8amzgbfzfb70qd5rjjz1lp8q557z0k4pmqhgii";
-      type = "gem";
-    };
-    version = "1.2.4";
-  };
   thor = {
     groups = ["default"];
     platforms = [];
@@ -465,5 +486,16 @@
       type = "gem";
     };
     version = "4.3.0";
+  };
+  vodozemac = {
+    dependencies = ["gem_kit" "rb_sys"];
+    groups = ["default"];
+    platforms = [];
+    source = {
+      remotes = ["https://rubygems.org"];
+      sha256 = "1rysz6rncaq1whva8km6q859ldm041r1914ryn59gpw0fsj0a5kc";
+      type = "gem";
+    };
+    version = "0.1.1";
   };
 }
