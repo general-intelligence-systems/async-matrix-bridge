@@ -50,8 +50,6 @@
 
         gemset = gemsetAttrs // { vodozemac = vodozemacGem; };
 
-        # mine.lib.buildGemset would be the one-liner here, but it has no way
-        # to pass extraConfigPaths through to bundlerEnv.
         gems = pkgs.bundlerEnv {
           name = "async-matrix-bridge";
           ruby = pkgs.ruby_3_4;
@@ -74,7 +72,7 @@
           ];
 
           shellHook = /* bash */ ''
-            export BUNDLE_FORCE_RUBY_PLATFORM=true
+            export BUNDLE_FORCE_RUBY_PLATFORM=false
             export BUNDLE_GEMFILE="$PWD/Gemfile"
             export BUNDLE_FROZEN=false
           '';

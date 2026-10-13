@@ -1,0 +1,36 @@
+# One homeserver, for running the examples and the tests against.
+#
+# The sibling async-matrix rig has a service per specification version, because it tests the version
+# mapping itself. Nothing here does: a bridge speaks whatever the homeserver it is registered with
+# speaks, so one version is enough and the newest is the one worth having.
+name: async-matrix-bridge
+
+services:
+  synapse:
+    # Always ask the registry: the tag is rebuilt rather than retired, so `spec-v1.19` means "the
+    # Synapse which implements Matrix v1.19" and points at a different one over time.
+    pull_policy: always
+    image: ghcr.io/${IMAGE_OWNER:-n-at-han-k}/synapse:spec-v1.19
+    environment:
+      SYNAPSE_CONFIG_PATH: /config/homeserver.yaml
+      PYTHONPATH: /config/modules
+    # The homeserver has to reach the service under test, which runs on the host. A bridged network
+    # cannot: the connection is dropped rather than refused, and the appservice scheduler then backs
+    # off to 512 seconds, so nothing arrives within a test. Host networking puts both on the same
+    # loopback, so `url: http://127.0.0.1:9000` in the registration is reachable and stays reachable.
+    network_mode: host
+    # The database and the media store, which homeserver.yaml puts under /tmp: the rig is thrown
+    # away with the container either way, and on disk SQLite's fsync per transaction is what a run
+    # spends its time on.
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./homeserver.yaml:/config/homeserver.yaml:ro
+      - ./appservice.yaml:/config/appservice.yaml:ro
+      - ./signing.key:/config/signing.key:ro
+      - ./modules:/config/modules:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7400/_matrix/client/versions || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30

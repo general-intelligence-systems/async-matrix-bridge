@@ -3,242 +3,161 @@
 # Released under the Apache License, Version 2.0.
 # Copyright, 2026, by General Intelligence Systems.
 
-require "async/matrix"
-require "json_schemer"
-require "pathname"
 require "yaml"
+
+require_relative "puppet"
 
 module Async
   module Matrix
     module Bridge
+      # What the homeserver was told about this service, which is also the whole of its authority.
+      #
+      # A service cannot register itself: one which could would claim `.*` and read everything, so an
+      # administrator puts this file beside the homeserver's own configuration by hand.
+      #
+      # The namespaces are regexes the homeserver holds too, which is why a user outside them is
+      # refused here rather than asked about: the answer is already known.
       class Registration
-        SCHEMA_DIR = Pathname.new(__dir__).join("registration", "schema").freeze
+        KINDS = ["users", "aliases", "rooms"].freeze
 
-        Homeserver = Struct.new(:address, :domain)
-
-        Appservice = Struct.new(:as_token, :hs_token, :sender_localpart)
-
-        NAMESPACES = %w[users rooms aliases].freeze
-
-        attr_reader :raw, :homeserver, :appservice
-
-        def self.schema
-          @schema ||= JSONSchemer.schema(SCHEMA_DIR.join("registration.json"))
+        # @parameter path [String] the registration file.
+        # @parameter homeserver [String] where the homeserver is.
+        # @returns [Registration] the registration it describes.
+        def self.load(path, homeserver:)
+          self.new(::YAML.safe_load_file(path), homeserver: homeserver)
         end
 
-        def self.load(path, homeserver:, domain:)
-          Pathname.new(path).then do |pathname|
-            unless pathname.exist?
-              raise Async::Matrix::NotFoundError.new(
-                "M_NOT_FOUND",
-                "Registration file not found: #{pathname}",
-              )
-            end
-
-            new(YAML.safe_load_file(pathname), homeserver: homeserver, domain: domain)
-          end
-        end
-
-        def self.validate!(data)
-          schema.validate(data).to_a.then do |errors|
-            unless errors.empty?
-              messages = errors.map { |error| error["error"] }.join("; ")
-              raise Async::Matrix::BadJsonError.new(
-                "M_BAD_JSON",
-                "Registration validation failed: #{messages}",
-              )
+        # @parameter value [Hash] the registration, as the file spells it.
+        # @parameter homeserver [String] where the homeserver is.
+        def initialize(value, homeserver:)
+          ["id", "as_token", "hs_token", "sender_localpart"].each do |field|
+            unless value[field]
+              raise ArgumentError, "A registration must declare #{field}!"
             end
           end
+
+          @value = value
+          @homeserver = homeserver
+          @domain = ::URI.parse(homeserver).host
         end
 
-        def initialize(data, homeserver:, domain:)
-          self.class.validate!(data)
+        # @attribute [Hash] the registration, as the file spells it.
+        attr :value
 
-          @raw = data
-          @homeserver = Homeserver.new(homeserver, domain)
-          @appservice = Appservice.new(
-            data["as_token"],
-            data["hs_token"],
-            data["sender_localpart"],
-          )
-        end
+        # @attribute [String] where the homeserver is.
+        attr :homeserver
 
-        def id = @raw["id"]
+        # @attribute [String] the server name the users of this service belong to.
+        attr :domain
 
-        def url = @raw["url"]
+        # @returns [String] what the homeserver knows this service as.
+        def id = @value["id"]
 
-        def as_token = @appservice.as_token
+        # @returns [String] the token this service authenticates to the homeserver with.
+        def as_token = @value["as_token"]
 
-        def hs_token = @appservice.hs_token
+        # @returns [String] the token the homeserver authenticates to this service with.
+        def hs_token = @value["hs_token"]
 
-        def sender_localpart = @appservice.sender_localpart
+        # @returns [String] the user an unnamed request acts as.
+        def sender = "@#{@value["sender_localpart"]}:#{@domain}"
 
-        def protocols = @raw["protocols"] || []
+        # @returns [Boolean] whether the homeserver pushes read receipts and typing as well as events.
+        def ephemeral? = @value.fetch("receive_ephemeral", false)
 
-        def rate_limited? = @raw.fetch("rate_limited", false)
-
-        def receive_ephemeral? = @raw.fetch("receive_ephemeral", false)
-
+        # @parameter kind [String] `users`, `aliases` or `rooms`.
+        # @returns [Array(Hash)] the namespaces of that kind.
         def namespaces(kind)
-          unless NAMESPACES.include?(kind.to_s)
-            raise ArgumentError, "unknown namespace #{kind.inspect}; expected one of #{NAMESPACES.join(", ")}"
+          unless KINDS.include?(kind)
+            raise ArgumentError, "A registration has no #{kind} namespace!"
           end
 
-          @raw.fetch("namespaces", {}).fetch(kind.to_s, [])
+          @value.dig("namespaces", kind) || []
         end
 
+        # Whether this service is interested in something, which is the same answer the homeserver has.
+        #
+        # @parameter kind [String] `users`, `aliases` or `rooms`.
+        # @parameter value [String] the ID or alias to ask about.
+        # @returns [Boolean] whether a namespace covers it.
         def covers?(kind, value)
-          namespaces(kind).any? { |entry| Regexp.new(entry["regex"]).match?(value) }
+          self.namespaces(kind).any?{|namespace| self.class.claims?(namespace, value)}
         end
 
-        def bot_mxid = "@#{sender_localpart}:#{@homeserver.domain}"
-
+        # Whether nothing else may create this, which is what an exclusive namespace means.
+        #
+        # @parameter kind [String] `users`, `aliases` or `rooms`.
+        # @parameter value [String] the ID or alias to ask about.
+        # @returns [Boolean] whether this service owns it alone.
         def exclusive?(kind, value)
-          namespaces(kind).any? do |entry|
-            entry["exclusive"] && Regexp.new(entry["regex"]).match?(value)
+          self.namespaces(kind).any? do |namespace|
+            namespace["exclusive"] and self.class.claims?(namespace, value)
           end
         end
+
+        # Whether one namespace names this, which is the whole of it rather than part.
+        #
+        # Anchored because a namespace names a user rather than appears inside one: unanchored,
+        # `@_bridge_.*` would claim `@notours_bridge_x:localhost` too, and a bridge asks this about
+        # senders to decide what is its own.
+        #
+        # @parameter namespace [Hash] one entry of one kind.
+        # @parameter value [String] the ID or alias to ask about.
+        # @returns [Boolean] whether the regex matches all of it.
+        def self.claims?(namespace, value)
+          ::Regexp.new("\\A(?:#{namespace["regex"]})\\z").match?(value)
+        end
+
+        # A client which acts as this service, or as one of the users it may act as.
+        #
+        # Identity assertion rather than a login: the token says which service, so the user is a
+        # parameter on every request. `Async::REST::Resource#with` merges it into the reference, which
+        # is why this is a derived resource rather than a middleware.
+        #
+        # `ts` is timestamp massaging, which only a service may ask for: it says when an event really
+        # happened, so a backlog carried over from another network is not stamped as now.
+        #
+        # @parameter client [Async::Matrix::ClientServer::Client] an unauthenticated client.
+        # @parameter user_id [String | nil] the user to act as, or nil for this service's own.
+        # @parameter device_id [String | nil] the device to act as, which is honoured from v1.17.
+        # @parameter ts [Integer | nil] when what is sent through it happened, in milliseconds.
+        # @returns [Async::Matrix::ClientServer::Client] a client which acts as them.
+        def as(client, user_id = nil, device_id: nil, ts: nil)
+          service = client.authenticated(self.as_token)
+          parameters = {user_id: user_id, device_id: device_id, ts: ts}.compact
+
+          case user_id
+          in nil
+            service.with(parameters: parameters)
+          in String if self.covers?("users", user_id)
+            service.with(parameters: parameters)
+          in String
+            raise ArgumentError, "#{user_id} is outside this service's namespaces!"
+          end
+        end
+
+        # The user this service is, as something which can be given a device.
+        #
+        # An unnamed request acts as this user, but acting as a *device* of theirs needs one to exist:
+        # a service holds keys per device, and the sender has none until it makes one.
+        #
+        # @parameter client [Async::Matrix::ClientServer::Client] an unauthenticated client.
+        # @returns [Puppet] the user this service is.
+        def bot(client)
+          Puppet.new(self, client, @value["sender_localpart"])
+        end
+
+        # One of this service's users, which has to be made before it can be acted as.
+        #
+        # @parameter client [Async::Matrix::ClientServer::Client] an unauthenticated client.
+        # @parameter localpart [String] the part of the ID which names them, without the sigil.
+        # @returns [Puppet] the user, and what makes it exist.
+        def puppet(client, localpart)
+          Puppet.new(self, client, localpart)
+        end
+
+        def inspect = "\#<#{self.class} #{self.id}>"
       end
     end
   end
 end
-
-__END__
-  require "tempfile"
-
-  describe "Async::Matrix::Bridge::Registration" do
-    Registration = Async::Matrix::Bridge::Registration
-
-    def valid_data
-      {
-        "id" => "agent",
-        "url" => "http://appservice:9000",
-        "as_token" => "as_secret",
-        "hs_token" => "hs_secret",
-        "sender_localpart" => "agent",
-        "namespaces" => {
-          "users" => [{"regex" => "@_agent_.*:localhost", "exclusive" => true}],
-          "aliases" => [],
-          "rooms" => [],
-        },
-      }
-    end
-
-    def rejected?(data)
-      Registration.new(data, homeserver: "http://hs", domain: "d")
-      false
-    rescue Async::Matrix::BadJsonError
-      true
-    end
-
-    def build(overrides = {})
-      Registration.new(valid_data.merge(overrides), homeserver: "http://synapse:8008", domain: "localhost")
-    end
-
-    it "reads the spec fields off the registration" do
-      registration = build
-      registration.id.should == "agent"
-      registration.url.should == "http://appservice:9000"
-      registration.sender_localpart.should == "agent"
-    end
-
-    it "presents the config surface a Client and an Endpoint need" do
-      registration = build
-      registration.homeserver.address.should == "http://synapse:8008"
-      registration.appservice.as_token.should == "as_secret"
-      registration.appservice.hs_token.should == "hs_secret"
-      registration.bot_mxid.should == "@agent:localhost"
-    end
-
-    it "derives bot_mxid from sender_localpart and the supplied domain" do
-      Registration.new(valid_data, homeserver: "http://hs", domain: "example.org")
-        .bot_mxid.should == "@agent:example.org"
-    end
-
-    it "requires the spec's required fields" do
-      ["id", "as_token", "hs_token", "sender_localpart", "namespaces"].map do |field|
-        rejected?(valid_data.reject { |k, _| k == field })
-      end.should == [true, true, true, true, true]
-    end
-
-    it "requires url to be present but allows an explicit null" do
-      build("url" => nil).url.should == nil
-
-      rejected?(valid_data.reject { |k, _| k == "url" }).should == true
-    end
-
-    it "rejects a namespace entry missing regex or exclusive" do
-      [{"exclusive" => true}, {"regex" => "@a:b"}].map do |entry|
-        rejected?(valid_data.merge("namespaces" => {"users" => [entry]}))
-      end.should == [true, true]
-    end
-
-    it "rejects a non-string id" do
-      rejected?(valid_data.merge("id" => 42)).should == true
-    end
-
-    it "reports whether a value falls in a namespace" do
-      registration = build
-      registration.covers?(:users, "@_agent_alice:localhost").should == true
-      registration.covers?(:users, "@someone:localhost").should == false
-    end
-
-    it "reports exclusivity separately from coverage" do
-      registration = build("namespaces" => {"users" => [{"regex" => "@a.*:localhost", "exclusive" => false}]})
-      registration.covers?(:users, "@alice:localhost").should == true
-      registration.exclusive?(:users, "@alice:localhost").should == false
-    end
-
-    it "returns an empty list for an absent namespace kind" do
-      build("namespaces" => {"users" => []}).namespaces(:rooms).should == []
-    end
-
-    it "raises for an unknown namespace kind" do
-      error =
-        begin
-          build.namespaces(:widgets)
-          nil
-        rescue ArgumentError => e
-          e
-        end
-
-      error.class.should == ArgumentError
-    end
-
-    it "defaults the spec's optional booleans to false" do
-      registration = build
-      registration.receive_ephemeral?.should == false
-      registration.rate_limited?.should == false
-      registration.protocols.should == []
-    end
-
-    it "reads receive_ephemeral when set" do
-      build("receive_ephemeral" => true).receive_ephemeral?.should == true
-    end
-
-    it "loads from a YAML file" do
-      file = Tempfile.new(["registration", ".yaml"])
-      begin
-        file.write(YAML.dump(valid_data))
-        file.close
-
-        registration = Registration.load(file.path, homeserver: "http://synapse:8008", domain: "localhost")
-        registration.id.should == "agent"
-        registration.bot_mxid.should == "@agent:localhost"
-      ensure
-        file.unlink
-      end
-    end
-
-    it "raises NotFoundError for a missing file" do
-      error =
-        begin
-          Registration.load("/nonexistent/registration.yaml", homeserver: "http://hs", domain: "d")
-          nil
-        rescue Async::Matrix::NotFoundError => e
-          e
-        end
-
-      error.class.should == Async::Matrix::NotFoundError
-    end
-  end

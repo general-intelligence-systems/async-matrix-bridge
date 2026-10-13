@@ -5,190 +5,127 @@
 [![License](https://img.shields.io/github/license/general-intelligence-systems/async-matrix-bridge)](https://github.com/general-intelligence-systems/async-matrix-bridge/blob/main/LICENSE)
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.3-red)](https://www.ruby-lang.org)
 
-Async-native [Matrix](https://matrix.org) Application Service SDK for Ruby -- the server side of a bridge or bot. Built on [async-matrix](https://github.com/general-intelligence-systems/async-matrix) and the [Socketry](https://github.com/socketry) ecosystem (`async`, `async-http`). No threads, no callbacks -- just fibers.
+The application service side of [Matrix](https://matrix.org), for Ruby: the half of a bridge the homeserver pushes to, built on [async-matrix](https://github.com/general-intelligence-systems/async-matrix) and so on [async-rest](https://github.com/socketry/async-rest).
 
-Your homeserver `PUT`s transactions of events at your service; this gem authenticates them with a constant-time token compare, deduplicates them by transaction ID, and hands each event to a block you pattern match on -- concurrently, in its own fiber. Calls back to the homeserver go through async-matrix's `Client`.
-
-## Install
+A homeserver `PUT`s a transaction of events at your service. This gem authenticates it, drops a repeat of one it has already answered, types every event with async-matrix's own event classes and hands the transaction to your block. Everything the service says back to the homeserver it says through an async-matrix `Client`, as the user it is pretending to be.
 
 ```ruby
 gem "async-matrix-bridge"
 ```
 
-An `Endpoint` is not a Rack app and needs no Rack server. Add one only if you
-want to run it in a Rack stack:
+## The gem
 
-```ruby
-gem "ratalada", "~> 4.0"
-gem "protocol-rack"
-```
+Five classes, and nothing else:
 
-## Quick Start
+| Class | What it is |
+| --- | --- |
+| `Registration` | the registration file both ends read, and the identities it permits |
+| `Puppet` | one user the service may act as, with its own device |
+| `Service` | a `Protocol::HTTP::Middleware` answering the application service API |
+| `Transaction` | one pushed transaction, as a representation of typed events |
+| `TransactionStore` | which transaction IDs have been answered already |
 
-The whole protocol is one class, and the events reach a block you pattern match
-on. There is no handler to register, no filter DSL and no base class.
+## Serving
 
-```ruby
+`Service` is middleware rather than a Rack app, so it is the thing an `Async::HTTP::Server` serves. The block is handed a `Transaction`, and the events in it are async-matrix event objects: `case/in` reads them by class and by field together.
+
+``` ruby
 require "async/matrix/bridge"
-require "ratalada/async"
 
-Bridge = Async::Matrix::Bridge
+registration = Async::Matrix::Bridge::Registration.load("registration.yaml", homeserver: "http://localhost:8008")
 
-config = Bridge::Registration.load("/config/registration.yaml",
-  homeserver: "http://synapse:8008", domain: "localhost")
-
-client = Async::Matrix::Client.new(config)
-store = Bridge::TransactionStore.new
-bot = config.bot_mxid
-
-Server.run(host: "0.0.0.0", port: 9000) do |request|
-  Bridge::Endpoint.new(request, config: config, store: store) do |message|
-    case message
-    in {type: "m.room.member", content: {membership: "invite"}, room_id:, state_key: ^bot}
-      client.join_room(room_id)
-    in {type: "m.room.message", content: {msgtype: "m.text", body:}, room_id:, sender:} if sender != bot
-      client.send_notice(room_id, "Echo: #{body}")
-    else
-      nil
+service = Async::Matrix::Bridge::Service.new(registration) do |transaction|
+  transaction.each_room do |room_id, events|
+    events.each do |event|
+      case event
+      in {sender:, content: Async::Matrix::Events::TextMessage(body:)}
+        puts "<#{sender}> #{body}"
+      else
+        nil
+      end
     end
-  end.response
-end
-```
-
-`Endpoint` also accepts a Rack env, so the same block works under any Rack
-server — pass `request.env` there instead.
-
-Working stacks with Synapse and Docker Compose live in
-[`examples/`](https://github.com/general-intelligence-systems/async-matrix-bridge/tree/main/examples).
-
-## Pattern matching
-
-The block is handed plain **symbol-keyed** Hashes. That is deliberate: Ruby's
-hash patterns match Symbol keys only, so `in {type: "m.room.message"}` would
-never match a `{"type" => ...}` parsed from JSON. Parsing with
-`symbolize_names` is what makes `case/in` destructure nested content with no
-`deconstruct_keys` on anything.
-
-The filters that used to be DSL options are now ordinary pattern syntax -- a
-pin for "addressed to me", a guard for "not from me":
-
-```ruby
-in {type: "m.room.member", content: {membership: "invite"}, state_key: ^bot}
-in {type: "m.room.message", content: {msgtype: "m.text", body:}, sender:} if sender != bot
-```
-
-Third-party protocol, location and user queries reach the same block as a
-`:query` Hash, so one `case` covers the whole protocol. Whatever it returns is
-the JSON body; `nil` is `M_NOT_FOUND`.
-
-```ruby
-in {query: :protocol, protocol:}
-  {instances: instances_for(protocol)}
-```
-
-## Without Rack
-
-`Endpoint` takes either a Rack env or a `Protocol::HTTP::Request`, and answers
-with whichever response type the source implies. So the same class drops into a
-bare `Async::HTTP::Server` with no Rack anywhere in the stack:
-
-```ruby
-server = Async::HTTP::Server.for(endpoint) do |request|
-  Bridge::Endpoint.new(request, config: config, store: store) do |message|
-    case message
-    in {type: "m.room.message", content: {body:}, room_id:}
-      client.send_notice(room_id, "Echo: #{body}")
-    else
-      nil
-    end
-  end.response
-end
-```
-
-Do not pin the server to HTTP/2: homeservers push transactions over HTTP/1.1
-and will not do h2c with prior knowledge, so a forced-HTTP2 listener never
-receives an event.
-
-## Your own routes
-
-An `Endpoint` answers `404` for any path outside `/_matrix/app/v1`, so it works
-as the fall-through of a router that matches its own routes first. Ask
-`handled?` if you would rather compose explicitly.
-
-```ruby
-Server.run do |request|
-  case request
-  in ["GET", "/healthz"] then "ok\n"
-  else Bridge::Endpoint.new(request, config: config, store: store) { |message| ... }.response
   end
 end
+
+Async do
+  Async::HTTP::Server.new(service, Async::HTTP::Endpoint.parse("http://0.0.0.0:9000")).run
+end
 ```
 
-## Concurrency and retries
+`each_room` groups a transaction's events by the room they belong to, in the order they arrived. `events` and `ephemeral` are the two lists the specification puts in a transaction; there is no third, which matters for encryption below.
 
-The events of a transaction are dispatched in their own fibers, bounded by
-`concurrency:` (default 8), and all of them are awaited before the response.
+A homeserver pushes over HTTP/1.1 and will not do h2c with prior knowledge, so a listener pinned to HTTP/2 never receives anything.
 
-If the block raises, the response is `500` and the transaction id is **not**
-recorded, so the homeserver retries it. Recording it and answering `200` would
-make a failed handler drop its events permanently, since the retry would be
-deduplicated away.
+The queries are three blocks rather than three routes. Each answers whether the service has something, and `nil` is `M_NOT_FOUND`:
 
-## Configuration
-
-`Registration` reads the application service registration file -- the one your
-homeserver already loads -- and validates it against the Matrix spec's own
-schema, vendored verbatim from
-[matrix-org/matrix-spec](https://github.com/matrix-org/matrix-spec/tree/main/data/api/application-service/definitions).
-Nothing is restated: the tokens, the sender localpart and the namespaces are
-read from the file the homeserver reads.
-
-```yaml
-# registration.yaml -- give this to your homeserver
-id: agent
-url: "http://appservice:9000"
-as_token: "your-appservice-token"
-hs_token: "your-homeserver-token"
-sender_localpart: agent
-namespaces:
-  users:
-    - exclusive: false
-      regex: "@.*:localhost"
-  aliases: []
-  rooms: []
+``` ruby
+service.query_user{|user_id| registration.covers?("users", user_id)}
+service.query_room{|room_alias| room_alias == "#_bridge_lobby:localhost"}
 ```
 
-```ruby
-config = Bridge::Registration.load("registration.yaml",
-  homeserver: "http://synapse:8008", domain: "localhost")
+A path outside `/_matrix/app/v1` is a `404` before anything is authenticated, so the service composes as the fall-through of a router which has its own routes.
 
-config.bot_mxid                              # => "@agent:localhost"
-config.covers?(:users, "@alice:localhost")   # => true
-config.exclusive?(:users, "@alice:localhost") # => false
+If your block raises, the response is `500` and the transaction ID is **not** recorded, so the homeserver retries it. Recording it would make one failed handler drop those events for good.
+
+## Acting as somebody
+
+A service does not log in. It asserts an identity: its own token says which service, and the user is a parameter on the request. `Registration#as` is that, and `Puppet` is one user it may act as.
+
+``` ruby
+puppet = registration.puppet(client, "_bridge_ripley")
+
+puppet.register!
+puppet.device!("RIPLEY1", display_name: "ripley")
+
+puppet.client.join_room(room_id)
+puppet.on("RIPLEY1").room(room_id).send_message(content.type, content.to_h)
 ```
 
-`homeserver:` and `domain:` are separate arguments because a registration
-describes the service *to* the homeserver and so cannot carry the server's own
-address. `domain` is required rather than inferred from the URL: a
-`server_name` need not match the host it is served from, and a wrong guess
-yields plausible, broken MXIDs.
+`puppet.client` is the user; `puppet.on(device_id)` is the user at one of its devices, which is what keys belong to. Both take `ts:`, which is how a bridge gives a message the time it was really said. A localpart outside the registration's namespaces is refused here rather than at the homeserver.
+
+Every one of those is an ordinary async-matrix call on a resource derived with `#with`. This gem adds no helpers of its own for talking to the homeserver, and it has no opinion about which calls a bridge makes.
+
+## Encryption
+
+A transaction carries `events` and `ephemeral`, and no keys at all. So nothing pushed to a service can be decrypted by anything that push told it — and the specification is explicit about the way in: a service which wants `/sync` syncs as one of its own users.
+
+So an encrypted bridge has two inputs which meet in one machine's store. The ciphertext is pushed, the keys are pulled, and neither input knows about the other:
+
+- the `Service` block hands the ciphertext to the machine, which defers what it cannot read yet,
+- a sync loop, running as a puppet, pulls the to-device traffic the keys arrive in, and the key releases the deferred event.
+
+Synapse answers `/sync` for the service's own user with a `500`, so the user which reads is a puppet rather than the sender localpart. [`examples/bridge.rb`](examples/bridge.rb) is that, whole and working, in one file.
+
+## The examples
+
+Both examples run against the homeserver in `synapse/`, and the suite runs them:
+
+- [`examples/bridge.rb`](examples/bridge.rb) — a bridge, both ways, between Matrix and a line protocol. A nick on the other network gets a user and a device of its own; an encrypted room is encrypted to, by claiming a key from every device and sharing a Megolm session over Olm; what Matrix says comes back out of the socket.
+- [`examples/puppeting.rb`](examples/puppeting.rb) — identity assertion on its own: the service's own user, a puppet, a device, published keys, cross-signing, timestamp massaging, and the refusal of a user outside the namespaces.
+
+``` bash
+REGISTRATION=./synapse/appservice.yaml HOMESERVER=http://localhost:7400 CHANNEL=lobby ENCRYPTED=true ruby examples/bridge.rb
+
+printf 'ripley\nhello from the network\n' | nc localhost 9100
+```
 
 ## Development
 
-```bash
-bin/test      # scampi, co-located `__END__` specs
+``` bash
+bin/test      # brings the homeserver up, then runs sus
 bin/rubocop
 ```
 
-async-matrix is an ordinary RubyGems dependency -- it resolves from RubyGems like any other gem, including inside the Nix devshell. To try a change to the core gem against this one, publish a prerelease of it, or `bundle config local` a git checkout; do not add a `path:` entry to the Gemfile. `bundlerEnv` cannot resolve a relative path source pointing outside the flake, so a path gem breaks `nix develop` outright.
+`bin/test` recreates the container rather than reusing it: its database is in tmpfs, and a transaction which failed once puts the homeserver's scheduler into a backoff reaching 512 seconds, which an example started afterwards would be waiting on rather than on itself.
 
-## Built With
+async-matrix is an ordinary RubyGems dependency. To try a change to it against this gem, publish a prerelease or `bundle config local` a git checkout; do not add a `path:` entry to the Gemfile, because `bundlerEnv` cannot resolve a path source pointing outside the flake and `nix develop` then fails outright.
 
-- [async-matrix](https://github.com/general-intelligence-systems/async-matrix) -- the Matrix protocol layer (client, events, media, E2EE)
-- [async](https://github.com/socketry/async) -- fiber-based concurrency framework
-- [protocol-http](https://github.com/socketry/protocol-http) -- the HTTP semantics `Endpoint` answers in
-- [json_schemer](https://github.com/davishmcclurg/json_schemer) -- JSON Schema validation
-- [scampi](https://github.com/general-intelligence-systems/scampi) -- inline co-located test framework
+## Built with
+
+- [async-matrix](https://github.com/general-intelligence-systems/async-matrix) — the Matrix protocol layer: clients, events, E2EE
+- [async-rest](https://github.com/socketry/async-rest) — resources and representations, which this gem's are
+- [protocol-http](https://github.com/socketry/protocol-http) — the middleware a `Service` is
+- [async](https://github.com/socketry/async) — fibers
 
 ## License
 

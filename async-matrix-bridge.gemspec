@@ -22,14 +22,13 @@ Gem::Specification.new do |spec|
 	 spec.metadata["documentation_uri"] = "https://github.com/general-intelligence-systems/async-matrix-bridge#readme"
 	 spec.metadata["rubygems_mfa_required"] = "true"
 
-	 spec.files = Dir["lib/**/*.rb", "lib/**/*.json", "LICENSE", "README.md"]
+	 spec.files = Dir["lib/**/*.rb"] + ["LICENSE", "README.md", "CHANGELOG.md"]
 	 spec.require_paths = ["lib"]
 
 	 spec.add_dependency "async", "~> 2.46"
-	 spec.add_dependency "async-matrix", "~> 3.0"
-	 spec.add_dependency "json_schemer", "~> 2.5"
+   spec.add_dependency "async-matrix", "~> 4.0", ">= 4.0.1"
+	 spec.add_dependency "protocol-http", "~> 0.72"
 
-  spec.add_development_dependency "scampi", "~> 1.0"
   spec.add_development_dependency "logger"
   spec.add_development_dependency "lefthook", "~> 2.2"
 end

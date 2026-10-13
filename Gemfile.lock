@@ -3,8 +3,8 @@ PATH
   specs:
     async-matrix-bridge (2.0.0)
       async (~> 2.46)
-      async-matrix (~> 4.0)
-      json_schemer (~> 2.5)
+      async-matrix (~> 4.0, >= 4.0.1)
+      protocol-http (~> 0.72)
 
 GEM
   remote: https://rubygems.org/
@@ -23,11 +23,12 @@ GEM
       protocol-http1 (~> 0.41)
       protocol-http2 (~> 0.28)
       protocol-url (~> 0.2)
-    async-matrix (4.0.0)
+    async-matrix (4.0.1)
       async-rest (~> 0.20)
       base64 (~> 0.3)
       console (~> 1.29)
       gem_kit (~> 0.2)
+      json_schemer (~> 2.5)
       vodozemac (~> 0.1)
     async-pool (0.12.0)
       async (>= 2.0)
@@ -80,9 +81,6 @@ GEM
     protocol-url (0.19.0)
     racc (1.8.1)
     rainbow (3.1.1)
-    rake-compiler-dock (1.12.0)
-    rb_sys (0.9.130)
-      rake-compiler-dock (= 1.12.0)
     regexp_parser (2.13.1)
     rubocop (1.91.0)
       json (>= 2.3)
@@ -99,15 +97,15 @@ GEM
       parser (>= 3.3.7.2)
       prism (~> 1.7)
     ruby-progressbar (1.13.0)
-    scampi (1.0.0)
     simpleidn (0.3.0)
+    sus (0.38.0)
+    sus-fixtures-async (0.2.0)
+      async
+      sus (~> 0.10)
     thor (1.5.0)
     unicode-display_width (3.3.0)
       unicode-emoji (~> 4.3)
     unicode-emoji (4.3.0)
-    vodozemac (0.1.1)
-      gem_kit (~> 0.2)
-      rb_sys (~> 0.9)
     vodozemac (0.1.1-aarch64-linux)
       gem_kit (~> 0.2)
     vodozemac (0.1.1-aarch64-linux-musl)
@@ -131,7 +129,6 @@ PLATFORMS
   arm-linux
   arm-linux-musl
   arm64-darwin
-  ruby
   x86_64-darwin
   x86_64-linux
   x86_64-linux-musl
@@ -142,7 +139,8 @@ DEPENDENCIES
   lefthook (~> 2.2)
   logger
   rubocop
-  scampi (~> 1.0)
+  sus
+  sus-fixtures-async
 
 BUNDLED WITH
    2.7.2

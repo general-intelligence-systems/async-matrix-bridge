@@ -1,0 +1,24 @@
+# The registration this bridge is known to the homeserver by.
+#
+# A service cannot register itself, so this file is mounted beside the homeserver's own
+# configuration and named by `app_service_config_files` in it.
+#
+# `url` is where the homeserver pushes transactions. The homeserver shares the host's network, so
+# this is the port the service under test listens on.
+id: async-matrix-bridge
+url: http://127.0.0.1:9000
+as_token: as_token_for_the_bridge
+hs_token: hs_token_for_the_bridge
+
+# The user an unnamed request acts as, which is `@_bridge_bot:localhost`.
+sender_localpart: _bridge_bot
+
+# Exclusive, and under an underscore, which is what keeps a puppet out of the way of a real user.
+namespaces:
+  users:
+    - exclusive: true
+      regex: "@_bridge_.*"
+  aliases:
+    - exclusive: true
+      regex: "#_bridge_.*"
+  rooms: []
