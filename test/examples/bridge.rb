@@ -260,6 +260,78 @@ describe "examples" do
     client.room(room_id).send_message(content.type, content.to_h)
   end
 
+  # Say something in a bridge's room WITH THE KEY HELD BACK, and answer with what the router published.
+  #
+  # This is the race a router has to survive, made deterministic. A client shares the session before it sends -- so the session is exported here before the message that uses it, which is what keeps the message inside the part of the ratchet the export can read -- but the two deliveries take different routes, and the one the homeserver pushes to the service arrives first. Holding the `m.room_key` back is that order, on purpose.
+  #
+  # So the service is handed ciphertext it cannot read, keeps it, and is given the session afterwards. What is asked for is the line it publishes THEN: a service which decrypts only in the transaction defers this message and never speaks of it again.
+  def raced(channel)
+    said = "a stranger says #{SecureRandom.hex(4)}"
+    heard = nil
+
+    Async::Matrix::ClientServer::Client[Async::Matrix::LATEST].open(HOMESERVER) do |unauthenticated|
+      alice = unauthenticated.logged_in("alice-#{SecureRandom.hex(4)}", "password")
+      owner = alice.get_token_owner
+
+      machine = Async::Matrix::E2EE::Machine.new(
+        user_id:   owner.user_id,
+        device_id: owner.device_id,
+        crypto:    Async::Matrix::E2EE::Olm.new,
+      )
+
+      machine.crypto.generate_one_time_keys(10)
+      alice.keys.upload_keys(device_keys: machine.device_keys, one_time_keys: machine.signed_one_time_keys)
+      machine.crypto.published_one_time_keys!
+
+      room_id = alice.directory.get_room_id_by_alias("#_bridge_#{channel}:localhost").room_id
+      alice.join_room(room_id)
+
+      # Whatever reads the streams, connected before anything is said so that nothing published can be missed.
+      socket = ::TCPSocket.new("127.0.0.1", REMOTE_PORT)
+
+      # Everybody's devices, and an Olm session with each: all of it before the session is exported, because this is what the export is delivered over.
+      members = alice.room(room_id).get_joined_members_by_room.user_ids
+      recipients = machine.recipients(alice.keys.query_keys(members.to_h{|id| [id, []]}))
+      wanted = machine.without_sessions(recipients)
+
+      unless wanted.empty?
+        machine.accept_claimed_keys(alice.keys.claim_keys(wanted))
+      end
+
+      session = machine.session_for(room_id)
+
+      content = machine.encrypt(room_id, Async::Matrix::Events::TextMessage.build(body: said))
+      alice.room(room_id).send_message(content.type, content.to_h)
+
+      # Long enough for the homeserver to have pushed it and the service to have deferred it, so that the key really is the second of the two to arrive.
+      sleep(3)
+
+      messages = recipients.group_by(&:user_id).transform_values do |devices|
+        devices.to_h do |device|
+          [device.device_id, machine.encrypt_to_device(
+            device,
+            "m.room_key",
+            {
+              algorithm: MEGOLM,
+              room_id: room_id,
+              session_id: session[:session_id],
+              session_key: session[:session_key],
+            },
+          )
+]
+        end
+      end
+
+      alice.to_device.send_to_device("m.room.encrypted", messages)
+
+      heard = self.line_from(socket)
+
+      socket.close
+    end
+
+    {said: said, heard: heard}
+  end
+
   # Whatever the bridge writes to the other network next, or nil if it writes nothing.
   def line_from(socket)
     case ::IO.select(
@@ -287,6 +359,9 @@ describe "examples" do
         # A bridge, so both directions are asked for rather than the exit status alone.
         in "bridge.rb"
           result = self.run_example(path, {"CHANNEL" => channel, "ENCRYPTED" => "true"}){self.cycle(channel)}
+        # A router, so what is asked of it is a message whose key arrives after it.
+        in "routing.rb"
+          result = self.run_example(path, {"CHANNEL" => channel}){self.raced(channel)}
         else
           result = self.run_example(path)
         end
@@ -304,10 +379,19 @@ describe "examples" do
         end
 
         case result
-        in {pushed: {said:, heard:}}
+        in {pushed: {said: Hash => said, heard: Hash => heard}}
           # Each side read what the other said, through a puppet and a Megolm session.
           expect(heard[:matrix]).to be == "@_bridge_ripley:localhost"
           expect(heard[:network]).to be(:include?, said[:matrix])
+
+        # THE DEFERRED MESSAGE, PUBLISHED: the line came out of the sync loop replaying what the key released, on the stream named after the bridge whose room it was.
+        in {pushed: {said: String => said, heard: String => heard}}
+          expect(heard).to be(:start_with?, channel)
+          expect(heard).to be(:include?, said)
+
+        in {pushed: {said: String => said, heard: nil}}
+          raise "routing.rb published nothing for a message whose key arrived second: #{said}"
+
         else
           nil
         end
