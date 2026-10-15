@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [3.0.0] - 2026-10-13
+
 A second ground-up pass, this time with async-rest as the only reference. The
 gem is five classes, the server side is middleware rather than a per-request
 object, and the events are async-matrix's own event classes rather than Hashes.
@@ -42,12 +45,26 @@ object, and the events are async-matrix's own event classes rather than Hashes.
 
 ### Changed
 
+- `Registration.new(value, homeserver:)` and `Registration.load(path,
+  homeserver:)` take the homeserver URL alone. `domain:` is gone, derived from
+  it with `URI.parse` so the two cannot disagree.
+
+- `Registration#homeserver` is the URL string rather than a `Homeserver`
+  struct; `#domain` is the derived server name. The `Homeserver` and
+  `Appservice` structs are gone, so `registration.homeserver.address`,
+  `.homeserver.domain` and `registration.appservice.*` become
+  `registration.homeserver`, `.domain` and the readers on `Registration`
+  itself.
+
+- `Registration#raw` → `#value`, `Registration#bot_mxid` → `#sender` returning
+  the full MXID, `Registration#receive_ephemeral?` → `#ephemeral?`.
+
 - Namespace regexes match the whole of a name rather than part of one. A
   service asks `covers?` to decide which senders are its own, and unanchored,
   `@_bridge_.*` claimed `@notours_bridge_x:localhost` as well.
 
-- `protocol-http` is a declared dependency, since a `Service` is one of its
-  middlewares.
+- `async-matrix` is now `~> 4.0`, and `protocol-http` is a declared dependency
+  since a `Service` is one of its middlewares.
 
 ### Removed
 
@@ -55,8 +72,14 @@ object, and the events are async-matrix's own event classes rather than Hashes.
   semaphore and the symbol-keyed Hashes. Events are objects a pattern reads by
   class and field together.
 
-- `json_schemer` and the vendored registration schemas. A registration is
-  validated by what it is asked for.
+- `json_schemer` and the vendored registration schemas, and with them
+  `Registration.schema` and `Registration.validate!`. A registration is
+  validated by what it is asked for: the four required fields are checked at
+  construction, anything else is reached through `#value`.
+
+- `Registration#url`, `Registration#protocols`, `Registration#rate_limited?`
+  and `Registration#sender_localpart`. Readers for fields this service does not
+  act on, which the file still carries and `#value` still exposes.
 
 
 ## [2.0.0] - 2026-10-09
