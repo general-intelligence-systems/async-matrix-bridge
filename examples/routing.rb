@@ -30,6 +30,55 @@ KEYS_ONLY = ::JSON.generate({room: {rooms: []}, presence: {types: []}})
 
 Bridge = Async::Matrix::Bridge
 
+Routing = Data.define(:registration, :bridge, :reader, :machine, :connections)
+
+def route(event, routing)
+  case event
+  in {sender: String => sender} if routing.registration.covers?("users", sender)
+    nil
+
+  in {content: Async::Matrix::Events::RoomEncrypted} if (plain = routing.machine.decrypt(event, room_id: event.room_id))
+    route(plain, routing)
+
+  in {content: Async::Matrix::Events::RoomEncrypted}
+    Console.info(self, "Deferred an event.", room_id: event.room_id, session_id: event.content[:session_id])
+
+  in {room_id: String => invited_to, state_key: String => invited, content: Async::Matrix::Events::RoomMember(membership: "invite")} if routing.registration.covers?("users", invited)
+    routing.bridge.client.join_room(invited_to)
+
+  in {room_id: String => said_in, sender: String => sender, content: Async::Matrix::Events::TextMessage(body:)}
+    owners = begin
+      routing.reader.room(said_in).get_joined_members_by_room.user_ids.filter_map do |member|
+        localpart = member.to_s.delete_prefix("@").split(":", 2).first.to_s
+
+        localpart.delete_prefix(PREFIX).split("_").first if localpart.start_with?(PREFIX)
+      end
+    rescue Async::Matrix::RequestError
+      []
+    end
+
+    case owners.first
+    in nil
+      Console.warn(self, "No bridge owns that room.", room_id: said_in)
+
+    in String => stream
+      routing.connections.each{|connection| connection.write("#{stream} #{sender} #{body}\n")}
+      routing.connections.each(&:flush)
+
+      Console.info(self, "Routed it.", stream: stream, event_id: event[:event_id], sender: sender)
+    end
+
+  in {session_id: String => refused, content: Async::Matrix::Events::Withheld(code:)}
+    Console.warn(self, "A session was withheld.", session_id: refused, code: code)
+
+  in {session_id: String => broken, content: Async::Matrix::Events::Undecryptable}
+    Console.error(self, "Could not read an event.", session_id: broken)
+
+  else
+    nil
+  end
+end
+
 Async do |task|
   Async::Matrix::ClientServer::Client[Async::Matrix::LATEST].open(HOMESERVER) do |client|
     registration = Bridge::Registration.load(REGISTRATION, homeserver: HOMESERVER)
@@ -68,67 +117,19 @@ Async do |task|
       ).id
     end
 
+    routing = Routing.new(
+      registration: registration,
+      bridge: bridge,
+      reader: reader,
+      machine: machine,
+      connections: connections,
+    )
+
     Console.info(self, "Routing.", channel: CHANNEL, room_id: room_id, as: bridge.user_id)
-
-    bridge_for = lambda do |named|
-      localpart = named.to_s.delete_prefix("@").split(":", 2).first.to_s
-
-      if localpart.start_with?(PREFIX)
-        localpart.delete_prefix(PREFIX).split("_").first
-      else
-        nil
-      end
-    end
-
-    stream_for = lambda do |asked|
-      reader.room(asked).get_joined_members_by_room.user_ids.filter_map{|member| bridge_for.call(member)}.first
-    rescue Async::Matrix::RequestError
-      nil
-    end
-
-    route = lambda do |stream, event, sender, body|
-      line = "#{stream} #{sender} #{body}\n"
-
-      connections.each{|connection| connection.write(line)}
-      connections.each(&:flush)
-
-      Console.info(self, "Routed it.", stream: stream, event_id: event[:event_id], sender: sender)
-    end
-
-    handler = lambda do |event, source|
-      case event
-      in {sender: String => sender} if registration.covers?("users", sender)
-        nil
-
-      in {room_id: String => invited_to, state_key: String => invited, content: Async::Matrix::Events::RoomMember(membership: "invite")} if registration.covers?("users", invited)
-        bridge.client.join_room(invited_to)
-
-      in {room_id: String => said_in, sender: String => sender, content: Async::Matrix::Events::TextMessage(body:)}
-        case stream_for.call(said_in)
-        in nil
-          Console.warn(self, "No bridge owns that room.", room_id: said_in, via: source)
-
-        in String => stream
-          route.call(stream, event, sender, body)
-        end
-
-      in {session_id: String => waiting_for, content: Async::Matrix::Events::Deferred}
-        Console.info(self, "Waiting for a session.", session_id: waiting_for, via: source)
-
-      in {sender: String => refused_by, content: Async::Matrix::Events::Withheld(code:)}
-        Console.warn(self, "A session was withheld.", sender: refused_by, code: code, via: source)
-
-      in {session_id: String => broken, content: Async::Matrix::Events::Undecryptable}
-        Console.error(self, "Could not read an event.", session_id: broken, via: source)
-
-      else
-        nil
-      end
-    end
 
     task.async do
       reader.sync(timeout: 0, filter: KEYS_ONLY).each(retries: 3) do |batch|
-        machine.each_event(batch){|event| handler.call(event, :sync)}
+        machine.each_event(batch){|event| route(event, routing)}
       end
     end
 
@@ -145,21 +146,8 @@ Async do |task|
     end
 
     service = Bridge::Service.new(registration) do |transaction|
-      transaction.each_room do |pushed_room, events|
-        events.each do |event|
-          case event
-          in {content: Async::Matrix::Events::RoomEncrypted}
-            case machine.decrypt(event, room_id: pushed_room)
-            in nil
-              Console.info(self, "Deferred an event.", room_id: pushed_room, session_id: event.content[:session_id])
-
-            in Async::Matrix::Events::Envelope => decrypted
-              handler.call(decrypted, :transaction)
-            end
-          else
-            handler.call(event, :transaction)
-          end
-        end
+      transaction.each_room do |_room_id, pushed|
+        pushed.each{|event| route(event, routing)}
       end
     end
 

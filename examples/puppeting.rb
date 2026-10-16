@@ -6,14 +6,13 @@
 
 require_relative "../lib/async/matrix/bridge"
 
-require "async/matrix/e2ee"
-
 require "async"
+require "async/matrix/e2ee"
 require "console"
 require "securerandom"
 
-HOMESERVER = ENV.fetch("HOMESERVER", "http://localhost:8008")
-REGISTRATION = ENV.fetch("REGISTRATION", "./registration.yaml")
+HOMESERVER = ENV.fetch("HOMESERVER", "http://localhost:7400")
+REGISTRATION = ENV.fetch("REGISTRATION", "./synapse/appservice.yaml")
 
 Bridge = Async::Matrix::Bridge
 
